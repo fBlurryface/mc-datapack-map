@@ -1,84 +1,59 @@
-///  declare const self: ServiceWorkerGlobalScope;
+/// <reference lib="webworker" />
+
+declare const self: ServiceWorkerGlobalScope;
 export { };
 
-import {
-	Climate,
-	DensityFunction,
-	WorldgenRegistries,
-	Identifier,
-	Holder,
-	NoiseGeneratorSettings,
-	RandomState,
-	NoiseParameters,
-	BiomeSource,
-} from "deepslate";
-
-type UpdateMessage = {
-	biomeSourceJson?: unknown,
-	noiseGeneratorSettingsJson?: unknown,
-	densityFunctions?: { [key: string]: unknown },
-	noises?: { [key: string]: unknown },
-	surfaceDensityFunctionId?: string,
-	terrainDensityFunctionId?: string,
-	generationVersion?: number,
-	seed?: bigint,
-	y?: number,
-	project_down?: boolean,
-
-	// NEW: when true, surface is derived by scanning NoiseRouter.finalDensity
-	use_final_density_surface?: boolean,
-}
+import { Climate, DensityFunction, WorldgenRegistries, Identifier, Holder, NoiseRouter, NoiseGeneratorSettings, RandomState, NoiseParameters, MultiNoiseBiomeSource, BiomeSource, FixedBiomeSource } from "deepslate"
 
 class MultiNoiseCalculator {
+
 	private state: {
 		sampler?: Climate.Sampler,
 		biomeSource?: BiomeSource,
 		surfaceDensityFunction?: DensityFunction,
 		terrainDensityFunction?: DensityFunction,
-
-		// NEW:
-		finalDensityFunction?: DensityFunction,
-		useFinalDensitySurface: boolean,
-
-		noiseGeneratorSettings?: NoiseGeneratorSettings,
-		randomState?: RandomState,
+		noiseGeneratorSettings?: NoiseGeneratorSettings
+		randomState?: RandomState
 		y: number,
 		seed: bigint,
-		projectDown: boolean,
-		generationVersion: number,
+		projectDown: boolean
+		generationVersion: number
 	} = {
 		y: 0,
 		seed: BigInt(0),
 		generationVersion: -1,
-		projectDown: true,
-
-		// NEW:
-		useFinalDensitySurface: false,
+		projectDown: true
 	}
 
 	private taskQueue: any[] = []
 
-	public update(update: UpdateMessage) {
+	public update(update: {
+		biomeSourceJson?: unknown,
+		noiseGeneratorSettingsJson?: unknown,
+		densityFunctions?: { [key: string]: unknown },
+		noises?: { [key: string]: unknown },
+		surfaceDensityFunctionId?: string,
+		terrainDensityFunctionId?: string,
+		generationVersion?: number
+
+		seed?: bigint,
+		y?: number,
+		project_down: boolean
+	}) {
 		this.state.seed = update.seed ?? this.state.seed
 		this.state.y = update.y ?? this.state.y
 		this.state.projectDown = update.project_down ?? this.state.projectDown
 		this.state.generationVersion = update.generationVersion ?? this.state.generationVersion
 
-		// NEW:
-		if (update.use_final_density_surface !== undefined) {
-			this.state.useFinalDensitySurface = update.use_final_density_surface
-		}
-
 		if (update.biomeSourceJson) {
 			this.state.biomeSource = BiomeSource.fromJson(update.biomeSourceJson)
 		}
 
+
 		if (update.densityFunctions) {
 			WorldgenRegistries.DENSITY_FUNCTION.clear()
 			for (const id in update.densityFunctions) {
-				const df = new DensityFunction.HolderHolder(
-					Holder.parser(WorldgenRegistries.DENSITY_FUNCTION, DensityFunction.fromJson)(update.densityFunctions[id])
-				)
+				const df = new DensityFunction.HolderHolder(Holder.parser(WorldgenRegistries.DENSITY_FUNCTION, DensityFunction.fromJson)(update.densityFunctions[id]))
 				WorldgenRegistries.DENSITY_FUNCTION.register(Identifier.parse(id), df)
 			}
 		}
@@ -97,60 +72,39 @@ class MultiNoiseCalculator {
 			this.state.sampler = Climate.Sampler.fromRouter(this.state.randomState.router)
 		}
 
-		// Build mapped density functions (same as before), plus optional finalDensity.
 		if (this.state.randomState && this.state.noiseGeneratorSettings) {
-			const visitor = this.state.randomState.createVisitor(
-				this.state.noiseGeneratorSettings.noise,
-				this.state.noiseGeneratorSettings.legacyRandomSource
-			)
-
-			// surface DF (unchanged behavior)
-			if (update.surfaceDensityFunctionId === "") {
+			if (update.surfaceDensityFunctionId === "<none>"){
 				this.state.surfaceDensityFunction = undefined
 			} else if (update.surfaceDensityFunctionId) {
 				this.state.surfaceDensityFunction = new DensityFunction.HolderHolder(
-					Holder.reference(WorldgenRegistries.DENSITY_FUNCTION, Identifier.parse(update.surfaceDensityFunctionId))
-				).mapAll(visitor)
+					Holder.reference(
+						WorldgenRegistries.DENSITY_FUNCTION,
+						Identifier.parse(update.surfaceDensityFunctionId)
+					)).mapAll(this.state.randomState.createVisitor(this.state.noiseGeneratorSettings.noise, this.state.noiseGeneratorSettings.legacyRandomSource))
 			}
 
-			// terrain DF (unchanged behavior)
-			if (update.terrainDensityFunctionId === "") {
+			if (update.terrainDensityFunctionId === "<none>"){
 				this.state.terrainDensityFunction = undefined
 			} else if (update.terrainDensityFunctionId) {
 				this.state.terrainDensityFunction = new DensityFunction.HolderHolder(
-					Holder.reference(WorldgenRegistries.DENSITY_FUNCTION, Identifier.parse(update.terrainDensityFunctionId))
-				).mapAll(visitor)
+					Holder.reference(
+						WorldgenRegistries.DENSITY_FUNCTION,
+						Identifier.parse(update.terrainDensityFunctionId)
+					)).mapAll(this.state.randomState.createVisitor(this.state.noiseGeneratorSettings.noise, this.state.noiseGeneratorSettings.legacyRandomSource))
 			}
-
-			// NEW: cache finalDensity DF if enabled
-			if (this.state.useFinalDensitySurface) {
-				const router: any = this.state.randomState.router as any
-				let fd: any = undefined
-
-				// deepslate uses camelCase like finalDensity
-				if (router?.finalDensity !== undefined) fd = router.finalDensity
-				// some libs might expose as method
-				else if (typeof router?.finalDensity === "function") fd = router.finalDensity()
-				// safety: snake case fallback
-				else if (router?.final_density !== undefined) fd = router.final_density
-
-				this.state.finalDensityFunction = fd?.mapAll ? fd.mapAll(visitor) : fd
-			} else {
-				this.state.finalDensityFunction = undefined
-			}
+			
 		}
 
-		// clear pending tasks on any update (unchanged)
 		this.taskQueue = []
 	}
 
-	public addTask(task: any) {
+	public addTask(task: any){
 		this.taskQueue.push(task)
 	}
 
-	public removeTask(key: string) {
+	public removeTask(key: string){
 		const index = this.taskQueue.findIndex((task) => task.key === key)
-		if (index >= 0) {
+		if (index >= 0){
 			this.taskQueue.splice(index, 1)
 		}
 	}
@@ -158,98 +112,27 @@ class MultiNoiseCalculator {
 	public async loop() {
 		while (true) {
 			if (this.taskQueue.length === 0) {
-				await new Promise(r => setTimeout(r, 1000))
+				await new Promise(r => setTimeout(r, 1000));
 			} else {
-				const nextTask = this.taskQueue.shift()
-				this.calculateMultiNoiseValues(
-					nextTask.key,
-					nextTask.min.x, nextTask.min.y,
-					nextTask.max.x, nextTask.max.y,
-					nextTask.tileSize
-				)
-				await new Promise(r => setTimeout(r, 0))
+				const nextTaks = this.taskQueue.shift()
+				this.calculateMultiNoiseValues(nextTaks.key, nextTaks.min.x, nextTaks.min.y, nextTaks.max.x, nextTaks.max.y, nextTaks.tileSize)
+				await new Promise(r => setTimeout(r, 0));
 			}
 		}
 	}
 
-	// NEW: derive surface Y by scanning finalDensity from top -> bottom.
-	// Returns highest y where density > 0, or +Infinity if unknown.
-	private surfaceFromFinalDensity(blockX: number, blockZ: number): number {
-		const fd = this.state.finalDensityFunction
-		const ngs: any = this.state.noiseGeneratorSettings as any
-		if (!fd || !ngs?.noise) return Number.POSITIVE_INFINITY
-
-		const minY: number = ngs.noise.minY ?? 0
-		const height: number = ngs.noise.height ?? 256
-		const maxYExclusive = minY + height
-
-		// Start at min(state.y, top-1)
-		let startY = Math.floor(Math.min(this.state.y, maxYExclusive - 1))
-
-		// Coarse step: 8 blocks (faster), then refine within the band
-		const coarseStep = 8
-
-		let foundSolidY: number | null = null
-		let lastAirY: number = startY + coarseStep // sentinel
-
-		for (let y = startY; y >= minY; y -= coarseStep) {
-			const d = fd.compute(DensityFunction.context(blockX, y, blockZ))
-			if (d > 0) {
-				foundSolidY = y
-				break
-			}
-			lastAirY = y
-		}
-
-		if (foundSolidY === null) return Number.POSITIVE_INFINITY
-
-		// refine between (foundSolidY .. lastAirY-1), inclusive
-		const refineTop = Math.min(startY, lastAirY - 1)
-		for (let y = refineTop; y >= foundSolidY; y--) {
-			const d = fd.compute(DensityFunction.context(blockX, y, blockZ))
-			if (d > 0) return y
-		}
-
-		return foundSolidY
-	}
-
-	private calculateMultiNoiseValues(
-		key: string,
-		min_x: number, min_z: number,
-		max_x: number, max_z: number,
-		tileSize: number
-	): void {
+	private calculateMultiNoiseValues(key: string, min_x: number, min_z: number, max_x: number, max_z: number, tileSize: number): void {
 		const array: { surface: number, biome: string, terrain: number }[][] = Array(tileSize + 2)
 		const step = (max_x - min_x) / tileSize
-
 		for (let ix = -1; ix < tileSize + 2; ix++) {
 			array[ix] = Array(tileSize + 2)
 			for (let iz = -1; iz < tileSize + 2; iz++) {
 				const x = ix * step + min_x
 				const z = iz * step + min_z
-
-				// x/z in quart → block
-				const bx = x * 4
-				const bz = z * 4
-
-				// surface:
-				let surface: number
-				if (this.state.useFinalDensitySurface) {
-					surface = this.surfaceFromFinalDensity(bx, bz)
-					// fallback to old method if finalDensity not available
-					if (!Number.isFinite(surface)) surface = Number.POSITIVE_INFINITY
-				} else {
-					surface = this.state.surfaceDensityFunction?.compute(DensityFunction.context(bx, this.state.y, bz)) ?? Number.POSITIVE_INFINITY
-				}
-
+				const surface = this.state.surfaceDensityFunction?.compute(DensityFunction.context(x * 4, this.state.y, z * 4)) ?? Number.POSITIVE_INFINITY
 				const y = this.state.projectDown ? Math.min(surface, this.state.y) : this.state.y
-
-				// biome sampling (unchanged)
 				const biome = this.state.biomeSource?.getBiome(x, y >> 2, z, this.state.sampler!).toString() ?? "minecraft:plains"
-
-				// terrain DF (unchanged)
-				const terrain = this.state.terrainDensityFunction?.compute(DensityFunction.context(bx, y, bz)) ?? Number.POSITIVE_INFINITY
-
+				const terrain = this.state.terrainDensityFunction?.compute(DensityFunction.context(x * 4, y , z * 4)) ?? Number.POSITIVE_INFINITY
 				array[ix][iz] = { surface, biome, terrain }
 			}
 		}
@@ -258,15 +141,16 @@ class MultiNoiseCalculator {
 	}
 }
 
+
 const multiNoiseCalculator = new MultiNoiseCalculator()
 multiNoiseCalculator.loop()
 
-self.onmessage = (evt: MessageEvent<any>) => {
-	if ("update" in evt.data) {
-		multiNoiseCalculator.update(evt.data.update as UpdateMessage)
-	} else if ("task" in evt.data) {
+self.onmessage = (evt: ExtendableMessageEvent) => {
+	if ("update" in evt.data){
+		multiNoiseCalculator.update(evt.data.update)
+	} else if ("task" in evt.data){
 		multiNoiseCalculator.addTask(evt.data.task)
-	} else if ("cancel" in evt.data) {
+	} else if ("cancel" in evt.data){
 		multiNoiseCalculator.removeTask(evt.data.cancel)
 	}
 }
