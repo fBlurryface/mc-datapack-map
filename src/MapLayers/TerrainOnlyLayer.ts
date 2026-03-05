@@ -28,11 +28,9 @@ type Tile = {
 function clamp01(v: number) {
 	return Math.max(0, Math.min(1, v))
 }
-
 function lerp(a: number, b: number, t: number) {
 	return a + (b - a) * t
 }
-
 function lerp3(a: [number, number, number], b: [number, number, number], t: number): [number, number, number] {
 	return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]
 }
@@ -59,8 +57,7 @@ export class TerrainOnlyLayer extends L.GridLayer {
 		super(options)
 
 		this.tileSize = options.tileSize as number
-
-		// ✅ 必须与 BiomeLayer 保持一致：1/4（对应 quart 网格，避免 biome 偏位）
+		// 保持和 BiomeLayer 一致（quart 网格）
 		this.calcResolution = 1 / 4
 
 		this.createWorkers()
@@ -77,7 +74,6 @@ export class TerrainOnlyLayer extends L.GridLayer {
 			waveImage.src = "images/wave.png"
 		})
 
-		// seed / dimension / datapack 变化都会触发 loadedDimensionStore reload
 		this.loadedDimensionStore.$subscribe(async () => {
 			await this.updateWorkers({
 				settings: true,
@@ -88,29 +84,28 @@ export class TerrainOnlyLayer extends L.GridLayer {
 		})
 	}
 
-	// === coloring (height + rivers + oceans + water) ===
 	private terrainColor(surface: number, biomeId: string, seaLevel: number, maxY: number): [number, number, number] {
 		const id = biomeId.toLowerCase()
 
+		// rivers / oceans by biome name (works for most packs, but not required)
 		const isRiver = id.includes("river")
 		const isOcean = id.includes("ocean")
 
-		// rivers: highlight blue
 		if (isRiver) return [40, 150, 245]
 
-		// shoreline band (helps visual sea boundary)
-		if (Number.isFinite(surface) && Math.abs(surface - seaLevel) <= 1.5) return [220, 210, 165]
+		// If surface is unknown, fall back to biome-based water.
+		if (!Number.isFinite(surface)) {
+			if (isOcean) return [25, 120, 210]
+			return [255, 255, 255]
+		}
 
-		// water by biome OR by height
-		if (isOcean || (Number.isFinite(surface) && surface <= seaLevel)) {
-			const depth = Number.isFinite(surface) ? clamp01((seaLevel - surface) / 32) : 0
+		// Water if ocean biome OR surface below sea level
+		if (isOcean || surface <= seaLevel) {
+			const depth = clamp01((seaLevel - surface) / 32)
 			return lerp3([25, 120, 210], [8, 25, 70], depth)
 		}
 
-		// unknown surface -> white
-		if (!Number.isFinite(surface)) return [255, 255, 255]
-
-		// land: low green -> high yellow/brown -> rock gray -> snow white
+		// Land hypsometric tint
 		const denom = Math.max(1, (maxY - seaLevel))
 		const t = clamp01((surface - seaLevel) / denom)
 
@@ -119,7 +114,6 @@ export class TerrainOnlyLayer extends L.GridLayer {
 		return lerp3([125, 125, 125], [245, 245, 245], (t - 0.75) / 0.25)
 	}
 
-	// ===== Draw tiles =====
 	async renderTile(tile: Tile) {
 		tile.isRendering = false
 
@@ -163,10 +157,9 @@ export class TerrainOnlyLayer extends L.GridLayer {
 				tile.ctx.fillStyle = `rgb(${r * hillshade}, ${g * hillshade}, ${b * hillshade})`
 				tile.ctx.fillRect(px, pz, pw, ph)
 
-				// water wave overlay: ocean/river biome OR below sea level
+				// wave overlay for obvious water
 				const isWaterBiome = biomeLower.includes("ocean") || biomeLower.includes("river")
 				const isBelowSea = Number.isFinite(surface) && surface < seaLevel - 2
-
 				if (isWaterBiome || isBelowSea) {
 					tile.ctx.drawImage(
 						waveImage,
@@ -226,7 +219,6 @@ export class TerrainOnlyLayer extends L.GridLayer {
 		}
 	}
 
-	// ==== Manage workers ====
 	private createWorkers() {
 		this.workers = []
 		for (let i = 0; i < WORKER_COUNT; i++) {
@@ -270,7 +262,7 @@ export class TerrainOnlyLayer extends L.GridLayer {
 			update.biomeSourceJson = toRaw(this.loadedDimensionStore.loaded_dimension.biome_source_json)
 			update.noiseGeneratorSettingsJson = toRaw(this.loadedDimensionStore.loaded_dimension.noise_settings_json)
 
-			// ✅ 关键：缺失时必须是 ""（BiomeLayer 就是这样传的）
+			// keep compatibility with existing pipeline
 			update.surfaceDensityFunctionId =
 				getCustomDensityFunction("snowcapped_surface", this.loadedDimensionStore.loaded_dimension.noise_settings_id!, this.settingsStore.dimension)?.toString()
 				?? ""
@@ -287,6 +279,9 @@ export class TerrainOnlyLayer extends L.GridLayer {
 			const level_height = this.loadedDimensionStore.loaded_dimension.level_height ?? { minY: 0, height: 256 }
 			update.y = level_height.minY + level_height.height
 			update.project_down = true
+
+			// NEW: force finalDensity-derived surface for correctness on modded worldgen
+			update.use_final_density_surface = true
 		}
 
 		this.workers.forEach(w => w.postMessage({ update }))
@@ -294,18 +289,17 @@ export class TerrainOnlyLayer extends L.GridLayer {
 
 	generateTile(key: string, coords: L.Coords, worker_id: number) {
 		// @ts-expect-error: _tileCoordsToBounds does not exist
-		const tileBounds = this._tileCoordsToBounds(coords)
+		const tileBounds = this._tileCoordsToBounds(coords);
 		const west = tileBounds.getWest(),
 			east = tileBounds.getEast(),
 			north = tileBounds.getNorth(),
-			south = tileBounds.getSouth()
+			south = tileBounds.getSouth();
 
-		// store bounds for slime overlay mapping
 		this.Tiles[key].bounds = { west, east, north, south }
 
 		const crs = this._map.options.crs!,
 			min = crs.project(L.latLng(north, west)).multiplyBy(0.25),
-			max = crs.project(L.latLng(south, east)).multiplyBy(0.25)
+			max = crs.project(L.latLng(south, east)).multiplyBy(0.25);
 
 		min.y *= -1
 		max.y *= -1
