@@ -2,7 +2,6 @@
 import "leaflet/dist/leaflet.css";
 import L, { control } from "leaflet";
 import { BiomeLayer } from "../MapLayers/BiomeLayer";
-import { TerrainOnlyLayer } from "../MapLayers/TerrainOnlyLayer";
 import { Graticule } from "../MapLayers/Graticule";
 import { onMounted, ref, watch, watchEffect } from 'vue';
 import BiomeTooltip from './BiomeTooltip.vue';
@@ -23,7 +22,6 @@ const loadedDimensionStore = useLoadedDimensionStore()
 const i18n = useI18n()
 
 let biomeLayer: BiomeLayer
-let terrainLayer: TerrainOnlyLayer | undefined
 let graticule: Graticule
 
 const tooltip_left = ref(0)
@@ -38,14 +36,12 @@ const show_sealevel = ref(false)
 const project_down = ref(true)
 
 const y = ref(320)
-
 const show_graticule = ref(false)
 
-// 新增：Terrain-only 底图开关（独立于原体系）
+// 新增：预留的“简化地形/史莱姆层”开关（目前只保留按钮外层逻辑）
 const show_terrain_map = ref(false)
 
 watch(show_graticule, (value) => {
-    if (!map) return
     if (value) {
         map.addLayer(graticule)
     } else {
@@ -53,24 +49,9 @@ watch(show_graticule, (value) => {
     }
 })
 
-// 切换底图：BiomeLayer <-> TerrainOnlyLayer
-watch(show_terrain_map, (value) => {
-    if (!map) return
-
-    if (value) {
-        if (terrainLayer === undefined) {
-            terrainLayer = new TerrainOnlyLayer({
-                tileSize: 256,
-                minZoom: -100
-            })
-        }
-
-        if (map.hasLayer(biomeLayer)) map.removeLayer(biomeLayer)
-        if (!map.hasLayer(terrainLayer)) map.addLayer(terrainLayer)
-    } else {
-        if (terrainLayer && map.hasLayer(terrainLayer)) map.removeLayer(terrainLayer)
-        if (!map.hasLayer(biomeLayer)) map.addLayer(biomeLayer)
-    }
+// 只保留按钮的外层逻辑：这里先不切换图层
+watch(show_terrain_map, () => {
+    // TODO: 后续在这里切换到“简化地形 + 史莱姆遮罩”底图
 })
 
 var map: L.Map
@@ -97,13 +78,13 @@ onMounted(() => {
     zoom.addTo(map)
 
     biomeLayer = new BiomeLayer({
-            tileSize: 256,
-            minZoom: -100
-        },
-        do_hillshade,
-        show_sealevel,
-        project_down,
-        y
+        tileSize: 256,
+        minZoom: -100
+    },
+    do_hillshade,
+    show_sealevel,
+    project_down,
+    y
     )
 
     map.addLayer(biomeLayer)
@@ -318,7 +299,6 @@ loadedDimensionStore.$subscribe((mutation, state) => {
 watch(searchStore.structures, () => {
     updateMarkers()
 })
-
 </script>
   
 <template>
@@ -327,47 +307,25 @@ watch(searchStore.structures, () => {
         </div>
         <div class="map_options">
             <Suspense>
-                <YSlider class="slider" :class="{ disabled_control: show_terrain_map }" v-model:y="y" />
+                <YSlider class="slider" v-model:y="y" />
             </Suspense>
-
-            <MapButton
-                icon="fa-arrows-down-to-line"
-                :disabled="show_terrain_map || loadedDimensionStore.surface_density_function === undefined"
-                v-model="project_down"
-                :title="i18n.t('map.setting.project')"
-            />
-
-            <MapButton
-                icon="fa-mountain-sun"
-                :disabled="show_terrain_map || ((!project_down || loadedDimensionStore.surface_density_function === undefined) && ! loadedDimensionStore.terrain_density_function)"
-                v-model="do_hillshade"
-                :title="i18n.t('map.setting.hillshade')"
-            />
-
-            <MapButton
-                icon="fa-water"
-                :disabled="show_terrain_map || loadedDimensionStore.surface_density_function === undefined"
-                v-model="show_sealevel"
-                :title="i18n.t('map.setting.sealevel')"
-            />
-
+            <MapButton icon="fa-arrows-down-to-line" :disabled="loadedDimensionStore.surface_density_function === undefined" v-model="project_down" :title="i18n.t('map.setting.project')" />
+            <MapButton icon="fa-mountain-sun" :disabled="(!project_down || loadedDimensionStore.surface_density_function === undefined) && ! loadedDimensionStore.terrain_density_function" v-model="do_hillshade"  :title="i18n.t('map.setting.hillshade')" />
+            <MapButton icon="fa-water" :disabled="loadedDimensionStore.surface_density_function === undefined" v-model="show_sealevel" :title="i18n.t('map.setting.sealevel')" />
             <MapButton icon="fa-table-cells" v-model="show_graticule" :title="i18n.t('map.setting.graticule')" />
 
-            <!-- 独立分组：Terrain-only 底图开关 -->
             <div class="terrain_toggle_group">
                 <MapButton
                     icon="fa-earth-europe"
                     :disabled="loadedDimensionStore.surface_density_function === undefined"
                     v-model="show_terrain_map"
-                    title="Terrain map (height / rivers / slime)"
+                    title="Terrain (simple) + slime"
                 />
             </div>
         </div>
     </div>
-
     <BiomeTooltip id="tooltip" v-if="show_tooltip" :style="{ left: tooltip_left + 'px', top: tooltip_top + 'px' }"
         :biome="tooltip_biome" :pos="tooltip_position" />
-
     <div class="top">
         <Transition>
             <div class="info zoom" v-if="needs_zoom">
@@ -380,7 +338,6 @@ watch(searchStore.structures, () => {
             </div>
         </Transition>
     </div>
-
     <Transition>
         <div class="info bottom teleport" v-if="show_info">
             {{ i18n.t('map.info.teleport_command_copied') }}
@@ -427,11 +384,6 @@ watch(searchStore.structures, () => {
     margin-top: 0.25rem;
     padding-top: 0.25rem;
     border-top: 1px solid rgba(255,255,255,0.25);
-}
-
-.disabled_control{
-    pointer-events: none;
-    opacity: 0.5;
 }
 
 #tooltip {
