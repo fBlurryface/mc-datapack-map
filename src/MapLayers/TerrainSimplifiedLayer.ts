@@ -10,6 +10,8 @@ import { useDatapackStore } from "../stores/useDatapackStore.js"
 import { toRaw, watch } from "vue"
 import { ResourceLocation } from "mc-datapack-loader"
 
+import { isSlimeChunk } from "../util/SlimeChunks"
+
 const WORKER_COUNT = 4
 
 type Tile = {
@@ -20,7 +22,10 @@ type Tile = {
 	array?: { surface: number, biome: string, terrain: number }[][],
 	step?: number,
 	isRendering?: boolean,
-	workerId: number
+	workerId: number,
+
+	// for slime overlay mapping
+	bounds?: { west: number, east: number, north: number, south: number }
 }
 
 function clamp01(v: number) {
@@ -73,13 +78,11 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 			waveImage.src = "images/wave.png"
 		})
 
-		// dimension/datapack 更新
 		this.loadedDimensionStore.$subscribe(async () => {
 			await this.updateWorkers({ settings: true, dimension: true, registires: true })
 			this.redraw()
 		})
 
-		// seed 更新（保险起见）
 		watch(() => this.settingsStore.seed, async () => {
 			await this.updateWorkers({ settings: true })
 			this.redraw()
@@ -89,21 +92,73 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 	private landColorByHeight(surface: number, seaLevel: number, maxY: number): [number, number, number] {
 		if (!Number.isFinite(surface)) return [80, 160, 95]
 
-		// 归一化高度：海平面以上开始计
 		const denom = Math.max(1, (maxY - seaLevel))
 		const t = clamp01((surface - seaLevel) / denom)
 
-		// 低地绿 -> 高地黄褐 -> 岩灰 -> 雪白
 		if (t < 0.35) return lerp3([55, 155, 75], [175, 175, 95], t / 0.35)
 		if (t < 0.75) return lerp3([175, 175, 95], [125, 125, 125], (t - 0.35) / 0.4)
 		return lerp3([125, 125, 125], [245, 245, 245], (t - 0.75) / 0.25)
 	}
 
 	private waterColor(surface: number, seaLevel: number): [number, number, number] {
-		// 深水更暗（surface 不可信时就用浅水色）
 		if (!Number.isFinite(surface)) return [25, 90, 190]
 		const depth = clamp01((seaLevel - surface) / 32)
 		return lerp3([25, 110, 210], [8, 25, 70], depth)
+	}
+
+	private drawSlimeOverlay(tile: Tile) {
+		// only overworld
+		if (this.settingsStore.dimension.toString() !== "minecraft:overworld") return
+		if (!this._map) return
+
+		// avoid too much work on low zoom
+		if (this._map.getZoom() < -3) return
+		if (!tile.bounds) return
+
+		const { west, east, north, south } = tile.bounds
+
+		// CRS.Simple: lng ~ x, lat ~ y ; project uses z = -lat (same convention as MainMap)
+		const xMin = west
+		const xMax = east
+		const zMin = -north
+		const zMax = -south
+
+		const w = xMax - xMin
+		const h = zMax - zMin
+		if (w <= 0 || h <= 0) return
+
+		const cx0 = Math.floor(xMin / 16)
+		const cx1 = Math.floor((xMax - 1) / 16)
+		const cz0 = Math.floor(zMin / 16)
+		const cz1 = Math.floor((zMax - 1) / 16)
+
+		const ctx = tile.ctx
+		ctx.save()
+
+		ctx.fillStyle = "rgba(120, 0, 255, 0.16)"
+		ctx.strokeStyle = "rgba(120, 0, 255, 0.40)"
+		ctx.lineWidth = 1
+
+		const seed = this.settingsStore.seed
+
+		for (let cx = cx0; cx <= cx1; cx++) {
+			for (let cz = cz0; cz <= cz1; cz++) {
+				if (!isSlimeChunk(seed, cx, cz)) continue
+
+				const bx0 = cx * 16
+				const bz0 = cz * 16
+
+				const px0 = ((bx0 - xMin) / w) * this.tileSize
+				const py0 = ((bz0 - zMin) / h) * this.tileSize
+				const pw = (16 / w) * this.tileSize
+				const ph = (16 / h) * this.tileSize
+
+				ctx.fillRect(px0, py0, pw, ph)
+				ctx.strokeRect(px0, py0, pw, ph)
+			}
+		}
+
+		ctx.restore()
 	}
 
 	async renderTile(tile: Tile) {
@@ -141,7 +196,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 					base = this.landColorByHeight(surface, seaLevel, maxY)
 				}
 
-				// 只对陆地做 hillshade（避免水面变脏）
 				let shade = 1.0
 				if (!isOcean && !isRiver) {
 					const s00 = tile.array[x + 1][z + 1].surface
@@ -162,7 +216,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 				tile.ctx.fillStyle = `rgb(${base[0] * shade}, ${base[1] * shade}, ${base[2] * shade})`
 				tile.ctx.fillRect(px, pz, pw, ph)
 
-				// 水纹：只按 biome 判断（不信 surface），保证结构一致
+				// 水纹：只按 biome 判断，保证结构稳定
 				if (isOcean || isRiver) {
 					tile.ctx.drawImage(
 						waveImage,
@@ -176,6 +230,9 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 				}
 			}
 		}
+
+		// ✅ 在地形图上叠加 slime chunks
+		this.drawSlimeOverlay(tile)
 	}
 
 	private createWorkers() {
@@ -221,7 +278,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 			update.biomeSourceJson = toRaw(this.loadedDimensionStore.loaded_dimension.biome_source_json)
 			update.noiseGeneratorSettingsJson = toRaw(this.loadedDimensionStore.loaded_dimension.noise_settings_json)
 
-			// ✅ 跟你 fork 的 BiomeLayer 一致：缺失就是 ""
 			update.surfaceDensityFunctionId =
 				getCustomDensityFunction("snowcapped_surface", this.loadedDimensionStore.loaded_dimension.noise_settings_id!, this.settingsStore.dimension)?.toString()
 				?? ""
@@ -234,7 +290,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 		if (do_update.settings) {
 			update.seed = this.settingsStore.seed
 
-			// 固定从世界顶端向下投影（不依赖 UI 的 y/project_down）
 			const level_height = this.loadedDimensionStore.loaded_dimension.level_height ?? { minY: 0, height: 256 }
 			update.y = level_height.minY + level_height.height
 			update.project_down = true
@@ -246,10 +301,14 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 	generateTile(key: string, coords: L.Coords, worker_id: number) {
 		// @ts-expect-error: _tileCoordsToBounds does not exist
 		const tileBounds = this._tileCoordsToBounds(coords);
+
 		const west = tileBounds.getWest(),
 			east = tileBounds.getEast(),
 			north = tileBounds.getNorth(),
 			south = tileBounds.getSouth();
+
+		// store bounds for slime overlay mapping
+		this.Tiles[key].bounds = { west, east, north, south }
 
 		const crs = this._map.options.crs!,
 			min = crs.project(L.latLng(north, west)).multiplyBy(0.25),
@@ -269,22 +328,22 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 	}
 
 	createTile(coords: L.Coords, done: L.DoneCallback): HTMLElement {
-		const tile = L.DomUtil.create("canvas", "leaflet-tile")
-		tile.width = tile.height = this.tileSize
-		tile.onselectstart = tile.onmousemove = L.Util.falseFn
+		const tileEl = L.DomUtil.create("canvas", "leaflet-tile") as HTMLCanvasElement
+		tileEl.width = tileEl.height = this.tileSize
+		tileEl.onselectstart = tileEl.onmousemove = L.Util.falseFn
 
-		const ctx = tile.getContext("2d")!
-		if (!this._map) return tile
+		const ctx = tileEl.getContext("2d")!
+		if (!this._map) return tileEl
 
 		this.datapackLoader?.then(() => {
 			const key = this._tileCoordsToKey(coords)
-			this.Tiles[key] = { coords: coords, canvas: tile, ctx: ctx, done: done, workerId: this.next_worker_id }
+			this.Tiles[key] = { coords: coords, canvas: tileEl, ctx: ctx, done: done, workerId: this.next_worker_id }
 
 			this.generateTile(key, coords, this.next_worker_id)
 			this.next_worker_id = (this.next_worker_id + 1) % WORKER_COUNT
 		})
 
-		return tile
+		return tileEl
 	}
 
 	_removeTile(key: string) {
