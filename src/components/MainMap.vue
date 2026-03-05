@@ -2,6 +2,7 @@
 import "leaflet/dist/leaflet.css";
 import L, { control } from "leaflet";
 import { BiomeLayer } from "../MapLayers/BiomeLayer";
+import { TerrainOnlyLayer } from "../MapLayers/TerrainOnlyLayer";
 import { Graticule } from "../MapLayers/Graticule";
 import { onMounted, ref, watch, watchEffect } from 'vue';
 import BiomeTooltip from './BiomeTooltip.vue';
@@ -22,6 +23,7 @@ const loadedDimensionStore = useLoadedDimensionStore()
 const i18n = useI18n()
 
 let biomeLayer: BiomeLayer
+let terrainLayer: TerrainOnlyLayer | undefined
 let graticule: Graticule
 
 const tooltip_left = ref(0)
@@ -39,11 +41,35 @@ const y = ref(320)
 
 const show_graticule = ref(false)
 
+// 新增：Terrain-only 底图开关（独立于原体系）
+const show_terrain_map = ref(false)
+
 watch(show_graticule, (value) => {
+    if (!map) return
     if (value) {
         map.addLayer(graticule)
     } else {
         map.removeLayer(graticule)
+    }
+})
+
+// 切换底图：BiomeLayer <-> TerrainOnlyLayer
+watch(show_terrain_map, (value) => {
+    if (!map) return
+
+    if (value) {
+        if (terrainLayer === undefined) {
+            terrainLayer = new TerrainOnlyLayer({
+                tileSize: 256,
+                minZoom: -100
+            })
+        }
+
+        if (map.hasLayer(biomeLayer)) map.removeLayer(biomeLayer)
+        if (!map.hasLayer(terrainLayer)) map.addLayer(terrainLayer)
+    } else {
+        if (terrainLayer && map.hasLayer(terrainLayer)) map.removeLayer(terrainLayer)
+        if (!map.hasLayer(biomeLayer)) map.addLayer(biomeLayer)
     }
 })
 
@@ -54,8 +80,6 @@ var spawnMarker: L.Marker
 
 var marker_map = new Map<string, { marker?: L.Marker, structure?: {id: Identifier, pos: BlockPos}}>()
 var needs_zoom = ref(false)
-
-
 
 onMounted(() => {
     map = L.map("map", {
@@ -97,7 +121,6 @@ onMounted(() => {
     markers = L.layerGroup().addTo(map)
 
     map.addEventListener("mousemove", (evt: L.LeafletMouseEvent) => {
-        //        await datapackStore.registered
         tooltip_left.value = evt.originalEvent.pageX-4
         tooltip_top.value = evt.originalEvent.pageY-4
 
@@ -110,7 +133,6 @@ onMounted(() => {
         show_tooltip.value = true
     })
 
-
     map.addEventListener("mouseout", (evt: L.LeafletMouseEvent) => {
         show_tooltip.value = false
     })
@@ -122,23 +144,15 @@ onMounted(() => {
         setTimeout(() => show_info.value = false, 2000)
     })
 
-
     map.on("moveend", (evt) => {
         setTimeout(updateMarkers, 5)
     })
 
     graticule = new Graticule()
-
-    /*
-    layer.on("tileunload", (evt) => {
-        // @ts-expect-error: _tileCoordsToBounds does not exist
-        const tileBounds = layer._tileCoordsToBounds(evt.coords);
-
-    })*/
-
 });
 
 watch(i18n.locale, () => {
+    if (!zoom) return
     zoom.setPosition(i18n.t('locale.text_direction') === 'ltr' ? 'topright' : 'topleft')
 })
 
@@ -156,7 +170,6 @@ function getPosition(map: L.Map, latlng: L.LatLng) {
 function isInBounds(pos: ChunkPos, min: ChunkPos, max: ChunkPos) {
     return (pos[0] >= min[0] && pos[0] <= max[0] && pos[1] >= min[1] && pos[1] <= max[1])
 }
-
 
 function updateMarkers() {
     const biomeSource = loadedDimensionStore.getBiomeSource()
@@ -209,7 +222,6 @@ function updateMarkers() {
                         const m: { marker?: L.Marker, structure?: {id: Identifier, pos: BlockPos} } = {}
 
                         marker_map.set(storage_id, m)
-
 
                         scheduler(() => {
                             if (marker_map.get(storage_id) !== m) return
@@ -315,16 +327,47 @@ watch(searchStore.structures, () => {
         </div>
         <div class="map_options">
             <Suspense>
-                <YSlider class="slider" v-model:y="y" />
+                <YSlider class="slider" :class="{ disabled_control: show_terrain_map }" v-model:y="y" />
             </Suspense>
-            <MapButton icon="fa-arrows-down-to-line" :disabled="loadedDimensionStore.surface_density_function === undefined" v-model="project_down" :title="i18n.t('map.setting.project')" />
-            <MapButton icon="fa-mountain-sun" :disabled="(!project_down || loadedDimensionStore.surface_density_function === undefined) && ! loadedDimensionStore.terrain_density_function" v-model="do_hillshade"  :title="i18n.t('map.setting.hillshade')" />
-            <MapButton icon="fa-water" :disabled="loadedDimensionStore.surface_density_function === undefined" v-model="show_sealevel" :title="i18n.t('map.setting.sealevel')" />
+
+            <MapButton
+                icon="fa-arrows-down-to-line"
+                :disabled="show_terrain_map || loadedDimensionStore.surface_density_function === undefined"
+                v-model="project_down"
+                :title="i18n.t('map.setting.project')"
+            />
+
+            <MapButton
+                icon="fa-mountain-sun"
+                :disabled="show_terrain_map || ((!project_down || loadedDimensionStore.surface_density_function === undefined) && ! loadedDimensionStore.terrain_density_function)"
+                v-model="do_hillshade"
+                :title="i18n.t('map.setting.hillshade')"
+            />
+
+            <MapButton
+                icon="fa-water"
+                :disabled="show_terrain_map || loadedDimensionStore.surface_density_function === undefined"
+                v-model="show_sealevel"
+                :title="i18n.t('map.setting.sealevel')"
+            />
+
             <MapButton icon="fa-table-cells" v-model="show_graticule" :title="i18n.t('map.setting.graticule')" />
+
+            <!-- 独立分组：Terrain-only 底图开关 -->
+            <div class="terrain_toggle_group">
+                <MapButton
+                    icon="fa-earth-europe"
+                    :disabled="loadedDimensionStore.surface_density_function === undefined"
+                    v-model="show_terrain_map"
+                    title="Terrain map (height / rivers / slime)"
+                />
+            </div>
         </div>
     </div>
+
     <BiomeTooltip id="tooltip" v-if="show_tooltip" :style="{ left: tooltip_left + 'px', top: tooltip_top + 'px' }"
         :biome="tooltip_biome" :pos="tooltip_position" />
+
     <div class="top">
         <Transition>
             <div class="info zoom" v-if="needs_zoom">
@@ -337,6 +380,7 @@ watch(searchStore.structures, () => {
             </div>
         </Transition>
     </div>
+
     <Transition>
         <div class="info bottom teleport" v-if="show_info">
             {{ i18n.t('map.info.teleport_command_copied') }}
@@ -379,12 +423,22 @@ watch(searchStore.structures, () => {
     left: 0.85rem;
 }
 
+.terrain_toggle_group{
+    margin-top: 0.25rem;
+    padding-top: 0.25rem;
+    border-top: 1px solid rgba(255,255,255,0.25);
+}
+
+.disabled_control{
+    pointer-events: none;
+    opacity: 0.5;
+}
+
 #tooltip {
     position: absolute;
     pointer-events: none;
     z-index: 500;
 }
-
 
 .top{
     position: absolute;
@@ -421,6 +475,4 @@ watch(searchStore.structures, () => {
     background-color: rgb(165, 33, 33);
     border: 2px solid white
 }
-
-
 </style>
