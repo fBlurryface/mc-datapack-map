@@ -10,7 +10,7 @@ import { useDatapackStore } from "../stores/useDatapackStore.js"
 import { toRaw, watch } from "vue"
 import { ResourceLocation } from "mc-datapack-loader"
 
-import { isSlimeChunk } from "../util/SlimeChunks"
+import { isSlimeChunk } from "../util/SlimeChunks.js"
 
 const WORKER_COUNT = 4
 
