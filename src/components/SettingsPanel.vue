@@ -114,16 +114,13 @@ function randomizeSeed() {
 	gap: 0.5rem;
 	align-items: center;
 	height: 2rem;
-}
-
-.view_setting {
-	height: auto;
-	align-items: flex-start;
+	min-width: 0;
 }
 
 .title {
 	height: fit-content;
-	width: 6.3rem;
+	width: 5.4rem; /* 比原来更窄一点，给右侧按钮腾空间 */
+	flex-shrink: 0;
 }
 
 .title.short {
@@ -137,6 +134,7 @@ function randomizeSeed() {
 	height: 1.6rem;
 	width: 1.6rem;
 	border-radius: 0.2rem;
+	flex-shrink: 0;
 }
 
 .button:hover,
@@ -151,6 +149,7 @@ input {
 	background-color: lightgray;
 	width: 0;
 	flex-grow: 1;
+	min-width: 0;
 	color: black;
 	border-radius: 0.3rem;
 	border: 2px solid rgb(55, 120, 173);
@@ -160,23 +159,31 @@ input {
 	box-sizing: border-box;
 	width: 0;
 	flex-grow: 1;
+	min-width: 0;
 	display: flex;
-	gap: 0.35rem;
+	gap: 0.25rem; /* 缩小按钮间距 */
 	background-color: rgba(0, 0, 0, 0.12);
 	border: 2px solid rgb(55, 120, 173);
 	border-radius: 0.45rem;
-	padding: 0.2rem;
+	padding: 0.16rem; /* 比之前更紧凑 */
 }
 
 .map_view_toggle button {
 	flex: 1;
-	height: 2rem;
+	min-width: 0;
+	height: 1.9rem;
 	border: none;
 	border-radius: 0.32rem;
 	background-color: transparent;
 	color: white;
 	cursor: pointer;
 	font: inherit;
+	font-size: 0.82rem; /* 关键：缩小字 */
+	line-height: 1;
+	padding: 0 0.2rem; /* 减少左右 padding */
+	white-space: nowrap; /* 不换行 */
+	overflow: hidden;
+	text-overflow: ellipsis;
 	transition: background-color 120ms ease, color 120ms ease;
 }
 
