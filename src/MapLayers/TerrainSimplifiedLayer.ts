@@ -23,8 +23,6 @@ type Tile = {
 	step?: number,
 	isRendering?: boolean,
 	workerId: number,
-
-	// for slime overlay mapping
 	bounds?: { west: number, east: number, north: number, south: number }
 }
 
@@ -60,8 +58,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 		super(options)
 
 		this.tileSize = options.tileSize as number
-
-		// ✅ 必须与 BiomeLayer 一致，保证海岸线/河网结构对齐
 		this.calcResolution = 1 / 4
 
 		this.createWorkers()
@@ -89,6 +85,21 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 		})
 	}
 
+	public override onAdd(map: L.Map): this {
+		super.onAdd(map)
+		void this.refreshForCurrentSettings()
+		return this
+	}
+
+	public async refreshForCurrentSettings() {
+		await this.datapackLoader
+		await this.updateWorkers({
+			settings: true,
+			dimension: true
+		})
+		this.redraw()
+	}
+
 	private landColorByHeight(surface: number, seaLevel: number, maxY: number): [number, number, number] {
 		if (!Number.isFinite(surface)) return [80, 160, 95]
 
@@ -107,17 +118,13 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 	}
 
 	private drawSlimeOverlay(tile: Tile) {
-		// only overworld
 		if (this.settingsStore.dimension.toString() !== "minecraft:overworld") return
 		if (!this._map) return
-
-		// avoid too much work on low zoom
 		if (this._map.getZoom() < -3) return
 		if (!tile.bounds) return
 
 		const { west, east, north, south } = tile.bounds
 
-		// CRS.Simple: lng ~ x, lat ~ y ; project uses z = -lat (same convention as MainMap)
 		const xMin = west
 		const xMax = east
 		const zMin = -north
@@ -134,7 +141,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 
 		const ctx = tile.ctx
 		ctx.save()
-
 		ctx.fillStyle = "rgba(120, 0, 255, 0.16)"
 		ctx.strokeStyle = "rgba(120, 0, 255, 0.40)"
 		ctx.lineWidth = 1
@@ -216,7 +222,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 				tile.ctx.fillStyle = `rgb(${base[0] * shade}, ${base[1] * shade}, ${base[2] * shade})`
 				tile.ctx.fillRect(px, pz, pw, ph)
 
-				// 水纹：只按 biome 判断，保证结构稳定
 				if (isOcean || isRiver) {
 					tile.ctx.drawImage(
 						waveImage,
@@ -231,7 +236,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 			}
 		}
 
-		// ✅ 在地形图上叠加 slime chunks
 		this.drawSlimeOverlay(tile)
 	}
 
@@ -307,7 +311,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 			north = tileBounds.getNorth(),
 			south = tileBounds.getSouth();
 
-		// store bounds for slime overlay mapping
 		this.Tiles[key].bounds = { west, east, north, south }
 
 		const crs = this._map.options.crs!,
