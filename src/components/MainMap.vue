@@ -49,9 +49,6 @@ const project_down = ref(true)
 const y = ref(320)
 const show_graticule = ref(false)
 
-// ✅ 地形底图开关（独立分组）
-const show_terrain_map = ref(false)
-
 let map: L.Map
 let zoom: L.Control.Zoom
 let markers: L.LayerGroup
@@ -69,7 +66,7 @@ function ensureSlimePane() {
 	if (!map || slimePaneReady) return
 	map.createPane("slime-info")
 	const pane = map.getPane("slime-info")
-	if (pane) pane.style.zIndex = "700" // above tiles
+	if (pane) pane.style.zIndex = "700"
 	slimePaneReady = true
 }
 
@@ -90,7 +87,6 @@ function showSlimeChunkPopup(chunkX: number, chunkZ: number) {
 	const xB2 = x0 + 16
 	const zB2 = z0 + 16
 
-	// CRS.Simple: lng ~ x, lat ~ y ; project uses z = -lat
 	const bounds = L.latLngBounds(
 		L.latLng(-(z0 + 16), x0),
 		L.latLng(-z0, x0 + 16)
@@ -136,6 +132,30 @@ function showSlimeChunkPopup(chunkX: number, chunkZ: number) {
 	slimePopup.setLatLng(center).setContent(html).openOn(map)
 }
 
+function ensureTerrainLayer() {
+	if (!terrainLayer) {
+		terrainLayer = new TerrainSimplifiedLayer({
+			tileSize: 256,
+			minZoom: -100
+		})
+	}
+	return terrainLayer
+}
+
+function applyMapView() {
+	if (!map || !biomeLayer) return
+
+	if (settingsStore.map_view === "terrain") {
+		const layer = ensureTerrainLayer()
+		if (map.hasLayer(biomeLayer)) map.removeLayer(biomeLayer)
+		if (!map.hasLayer(layer)) map.addLayer(layer)
+	} else {
+		clearSlimeSelection()
+		if (terrainLayer && map.hasLayer(terrainLayer)) map.removeLayer(terrainLayer)
+		if (!map.hasLayer(biomeLayer)) map.addLayer(biomeLayer)
+	}
+}
+
 // ===== UI toggles =====
 watch(show_graticule, (value) => {
 	if (!map) return
@@ -143,26 +163,8 @@ watch(show_graticule, (value) => {
 	else map.removeLayer(graticule)
 })
 
-// ✅ 切换底图：BiomeLayer <-> TerrainSimplifiedLayer
-watch(show_terrain_map, (value) => {
-	if (!map) return
-
-	if (value) {
-		if (terrainLayer === undefined) {
-			terrainLayer = new TerrainSimplifiedLayer({
-				tileSize: 256,
-				minZoom: -100
-			})
-		}
-		if (map.hasLayer(biomeLayer)) map.removeLayer(biomeLayer)
-		if (!map.hasLayer(terrainLayer)) map.addLayer(terrainLayer)
-	} else {
-		// 关闭地形图时，顺便清掉 slime 选中状态
-		clearSlimeSelection()
-
-		if (terrainLayer && map.hasLayer(terrainLayer)) map.removeLayer(terrainLayer)
-		if (!map.hasLayer(biomeLayer)) map.addLayer(biomeLayer)
-	}
+watch(() => settingsStore.map_view, () => {
+	applyMapView()
 })
 
 onMounted(() => {
@@ -191,6 +193,7 @@ onMounted(() => {
 	)
 
 	map.addLayer(biomeLayer)
+	applyMapView()
 
 	spawnMarker = L.marker({ lat: 0, lng: 0 }, {
 		icon: L.icon({
@@ -231,12 +234,9 @@ onMounted(() => {
 		setTimeout(() => show_info.value = false, 2000)
 	})
 
-	// ✅ 新增：点击 slime chunk 显示区块坐标/四角坐标
 	map.addEventListener("click", (evt: L.LeafletMouseEvent) => {
-		// 只在地形图模式下响应
-		if (!show_terrain_map.value) return
+		if (settingsStore.map_view !== "terrain") return
 
-		// slime chunk 仅主世界
 		if (settingsStore.dimension.toString() !== "minecraft:overworld") {
 			clearSlimeSelection()
 			return
@@ -439,8 +439,6 @@ loadedDimensionStore.$subscribe(() => {
 
 	updateMarkers()
 	updateSpawnMarker()
-
-	// 切换维度/seed/worldgen 时，清理 slime 选中（避免残留）
 	clearSlimeSelection()
 
 	const level_height = loadedDimensionStore.loaded_dimension.level_height
@@ -463,41 +461,34 @@ watch(searchStore.structures, () => {
 		<div id="map"></div>
 
 		<div class="map_options">
-			<Suspense>
-				<YSlider class="slider" :class="{ disabled_control: show_terrain_map }" v-model:y="y" />
-			</Suspense>
+			<template v-if="settingsStore.map_view === 'biome'">
+				<Suspense>
+					<YSlider class="slider" v-model:y="y" />
+				</Suspense>
 
-			<MapButton
-				icon="fa-arrows-down-to-line"
-				:disabled="show_terrain_map || loadedDimensionStore.surface_density_function === undefined"
-				v-model="project_down"
-				:title="i18n.t('map.setting.project')"
-			/>
+				<MapButton
+					icon="fa-arrows-down-to-line"
+					:disabled="loadedDimensionStore.surface_density_function === undefined"
+					v-model="project_down"
+					:title="i18n.t('map.setting.project')"
+				/>
 
-			<MapButton
-				icon="fa-mountain-sun"
-				:disabled="show_terrain_map || ((!project_down || loadedDimensionStore.surface_density_function === undefined) && !loadedDimensionStore.terrain_density_function)"
-				v-model="do_hillshade"
-				:title="i18n.t('map.setting.hillshade')"
-			/>
+				<MapButton
+					icon="fa-mountain-sun"
+					:disabled="((!project_down || loadedDimensionStore.surface_density_function === undefined) && !loadedDimensionStore.terrain_density_function)"
+					v-model="do_hillshade"
+					:title="i18n.t('map.setting.hillshade')"
+				/>
 
-			<MapButton
-				icon="fa-water"
-				:disabled="show_terrain_map || loadedDimensionStore.surface_density_function === undefined"
-				v-model="show_sealevel"
-				:title="i18n.t('map.setting.sealevel')"
-			/>
+				<MapButton
+					icon="fa-water"
+					:disabled="loadedDimensionStore.surface_density_function === undefined"
+					v-model="show_sealevel"
+					:title="i18n.t('map.setting.sealevel')"
+				/>
+			</template>
 
 			<MapButton icon="fa-table-cells" v-model="show_graticule" :title="i18n.t('map.setting.graticule')" />
-
-			<div class="terrain_toggle_group">
-				<MapButton
-					icon="fa-earth-europe"
-					:disabled="loadedDimensionStore.surface_density_function === undefined"
-					v-model="show_terrain_map"
-					title="Terrain map (height / rivers / slime)"
-				/>
-			</div>
 		</div>
 	</div>
 
@@ -562,17 +553,6 @@ watch(searchStore.structures, () => {
 .map_options:dir(rtl) {
 	right: unset;
 	left: 0.85rem;
-}
-
-.terrain_toggle_group {
-	margin-top: 0.25rem;
-	padding-top: 0.25rem;
-	border-top: 1px solid rgba(255, 255, 255, 0.25);
-}
-
-.disabled_control {
-	pointer-events: none;
-	opacity: 0.5;
 }
 
 #tooltip {
