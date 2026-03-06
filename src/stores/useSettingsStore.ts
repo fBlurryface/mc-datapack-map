@@ -2,84 +2,106 @@ import { Identifier } from "deepslate";
 import { defineStore } from "pinia";
 import { computed, ref, watch, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
+
 import { useDatapackStore } from "./useDatapackStore.js";
 import { EventTracker } from "../util/EventTracker.js";
 import { parseSeed, updateUrlParam, versionMetadata } from "../util.js";
 
+type MapView = "biome" | "terrain";
+
 export const useSettingsStore = defineStore('settings', () => {
-    const defaults = {
-        mc_version: "1_21_11",
-        world_preset: "minecraft:normal",
-        dimension: "minecraft:overworld",
-        seed: "0"
-    }
+	const defaults = {
+		mc_version: "1_21_11",
+		world_preset: "minecraft:normal",
+		dimension: "minecraft:overworld",
+		seed: "0",
+		map_view: "biome" as MapView
+	}
 
-    const uri = window.location.search.substring(1)
-    const params = {...defaults, ...Object.fromEntries(new URLSearchParams(uri))}
+	const uri = window.location.search.substring(1)
+	const params = { ...defaults, ...Object.fromEntries(new URLSearchParams(uri)) }
 
-    if (versionMetadata[params.mc_version] === undefined){
-        params.mc_version = defaults.mc_version
-        updateUrlParam('mc_version')
-    }
+	if (versionMetadata[params.mc_version] === undefined) {
+		params.mc_version = defaults.mc_version
+		updateUrlParam('mc_version')
+	}
 
-    const i18n = useI18n()
+	if (params.map_view !== "biome" && params.map_view !== "terrain") {
+		params.map_view = defaults.map_view
+		updateUrlParam('map_view')
+	}
 
-    const collator = computed(() => new Intl.Collator(i18n.locale.value.replace('_','-')))
-    
-    const dev_mode = ref(false)
-    const mc_version = ref(versionMetadata[params.mc_version] ? params.mc_version : defaults.mc_version)
-    const world_preset = ref(Identifier.parse(params.world_preset))
-    const dimension = ref(Identifier.parse(params.dimension))
-    const seed = ref(parseSeed(params.seed))
+	const i18n = useI18n()
+	const collator = computed(() => new Intl.Collator(i18n.locale.value.replace('_', '-')))
 
-    const datapackStore = useDatapackStore()
+	const dev_mode = ref(false)
 
-    watch(mc_version, (new_version) => {
-        updateUrlParam('mc_version', new_version, defaults.mc_version)
-        EventTracker.track(`change_version/${new_version}`)
-    })
+	const mc_version = ref(versionMetadata[params.mc_version] ? params.mc_version : defaults.mc_version)
+	const world_preset = ref(Identifier.parse(params.world_preset))
+	const dimension = ref(Identifier.parse(params.dimension))
+	const seed = ref(parseSeed(params.seed))
+	const map_view = ref<MapView>(params.map_view)
 
-    watch(world_preset, (new_preset) => {
-        updateUrlParam('world_preset', new_preset.toString(), defaults.world_preset)
-        EventTracker.track(`change_world_preset`)
-    })
+	const datapackStore = useDatapackStore()
 
-    watch(dimension, (new_dimension) => {
-        updateUrlParam('dimension', new_dimension.toString(), defaults.dimension)
-        EventTracker.track(`change_dimension`)
-    })
+	watch(mc_version, (new_version) => {
+		updateUrlParam('mc_version', new_version, defaults.mc_version)
+		EventTracker.track(`change_version/${new_version}`)
+	})
 
-    watch(dev_mode, (new_dev_mode) => {
-        EventTracker.track(`change_dev_mode/${new_dev_mode}`)
-    })
+	watch(world_preset, (new_preset) => {
+		updateUrlParam('world_preset', new_preset.toString(), defaults.world_preset)
+		EventTracker.track(`change_world_preset`)
+	})
 
-    watch(seed, (new_seed) => {
-        updateUrlParam('seed', `${new_seed}`)
-    })
+	watch(dimension, (new_dimension) => {
+		updateUrlParam('dimension', new_dimension.toString(), defaults.dimension)
+		EventTracker.track(`change_dimension`)
+	})
 
-    datapackStore.$subscribe(async () => {
-        if ((await datapackStore.world_presets)?.findIndex((id) => id.equals(world_preset.value)) === -1) {
-            world_preset.value = (await datapackStore.world_presets)[0]
-        }
+	watch(map_view, (new_view) => {
+		updateUrlParam('map_view', new_view, defaults.map_view)
+		EventTracker.track(`change_map_view/${new_view}`)
+	})
 
-        if ((await datapackStore.dimensions)?.findIndex((id) => id.equals(dimension.value)) === -1) {
-            dimension.value = (await datapackStore.dimensions)[0]
-        }
-    })
+	watch(dev_mode, (new_dev_mode) => {
+		EventTracker.track(`change_dev_mode/${new_dev_mode}`)
+	})
 
-    watchEffect(() => {
-        document.dir = i18n.t('locale.text_direction','ltr')
-        document.documentElement.lang = i18n.locale.value
-    })
+	watch(seed, (new_seed) => {
+		updateUrlParam('seed', `${new_seed}`)
+	})
 
-    function getLocalizedName(type: string, id: Identifier, path_only: boolean){
-        const fallbackString = path_only ? id.path : id.toString()
-        if (dev_mode.value){
-            return fallbackString
-        }
-        return i18n.t(`minecraft.${type}.${id.namespace}.${id.path.replace('/','.')}`, fallbackString)
-    }
+	datapackStore.$subscribe(async () => {
+		if ((await datapackStore.world_presets)?.findIndex((id) => id.equals(world_preset.value)) === -1) {
+			world_preset.value = (await datapackStore.world_presets)[0]
+		}
+		if ((await datapackStore.dimensions)?.findIndex((id) => id.equals(dimension.value)) === -1) {
+			dimension.value = (await datapackStore.dimensions)[0]
+		}
+	})
 
+	watchEffect(() => {
+		document.dir = i18n.t('locale.text_direction', 'ltr')
+		document.documentElement.lang = i18n.locale.value
+	})
 
-    return {mc_version, world_preset, dimension, seed, collator, dev_mode, getLocalizedName}
+	function getLocalizedName(type: string, id: Identifier, path_only: boolean) {
+		const fallbackString = path_only ? id.path : id.toString()
+		if (dev_mode.value) {
+			return fallbackString
+		}
+		return i18n.t(`minecraft.${type}.${id.namespace}.${id.path.replace('/', '.')}`, fallbackString)
+	}
+
+	return {
+		mc_version,
+		world_preset,
+		dimension,
+		seed,
+		map_view,
+		collator,
+		dev_mode,
+		getLocalizedName
+	}
 })
