@@ -57,7 +57,7 @@ let spawnMarker: L.Marker
 let marker_map = new Map<string, { marker?: L.Marker, structure?: { id: Identifier, pos: BlockPos } }>()
 let needs_zoom = ref(false)
 
-// ===== Slime selection UI (rectangle + popup) =====
+// ===== Slime selection UI =====
 let slimeSelectRect: L.Rectangle | undefined
 let slimePopup: L.Popup | undefined
 let slimePaneReady = false
@@ -149,6 +149,7 @@ function applyMapView() {
 		const layer = ensureTerrainLayer()
 		if (map.hasLayer(biomeLayer)) map.removeLayer(biomeLayer)
 		if (!map.hasLayer(layer)) map.addLayer(layer)
+		void layer.refreshForCurrentSettings()
 	} else {
 		clearSlimeSelection()
 		if (terrainLayer && map.hasLayer(terrainLayer)) map.removeLayer(terrainLayer)
@@ -156,7 +157,6 @@ function applyMapView() {
 	}
 }
 
-// ===== UI toggles =====
 watch(show_graticule, (value) => {
 	if (!map) return
 	if (value) map.addLayer(graticule)
@@ -440,6 +440,10 @@ loadedDimensionStore.$subscribe(() => {
 	updateMarkers()
 	updateSpawnMarker()
 	clearSlimeSelection()
+
+	if (settingsStore.map_view === "terrain" && terrainLayer) {
+		void terrainLayer.refreshForCurrentSettings()
+	}
 
 	const level_height = loadedDimensionStore.loaded_dimension.level_height
 	if (level_height) {
