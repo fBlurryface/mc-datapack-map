@@ -139,18 +139,15 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 
 		let base: RGB
 
-		// continental shelf / shallow water
 		if (depth <= 6) {
 			base = isFrozen ? [160, 205, 225] : [75, 165, 215]
 		}
-		// regular ocean
 		else if (!isDeep) {
 			const t = clamp01((depth - 6) / 26)
 			base = isFrozen
 				? lerp3([150, 195, 220], [78, 120, 170], t)
 				: lerp3([60, 145, 210], [20, 70, 150], t)
 		}
-		// deep ocean
 		else {
 			const t = clamp01((depth - 36) / 48)
 			base = isFrozen
@@ -179,42 +176,33 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 
 		let base: RGB
 
-		// 低地 / 海岸附近
 		if (surface <= seaLevel + 6) {
 			base = desert ? [188, 170, 112] : [98, 148, 88]
 		}
-		// 平原/低丘
 		else if (surface <= 90) {
 			base = desert ? [182, 156, 98] : lush ? [72, 132, 76] : [108, 145, 84]
 		}
-		// 丘陵
 		else if (surface <= 118) {
 			base = desert ? [172, 142, 92] : warmDry ? [144, 136, 78] : [132, 142, 86]
 		}
-		// 高地
 		else if (surface <= 140) {
 			base = desert ? [162, 132, 92] : [146, 132, 94]
 		}
-		// 亚高山 / 裸岩开始
 		else if (surface <= 165) {
 			base = snowy ? [138, 142, 150] : [128, 124, 120]
 		}
-		// 雪线以上
 		else if (surface <= 195) {
 			base = snowy ? [225, 233, 240] : [208, 208, 206]
 		}
-		// 极高峰
 		else {
 			base = snowy ? [244, 247, 250] : [230, 230, 228]
 		}
 
-		// 高海拔陡坡强化：让山脊更明显
 		if (surface > 120) {
 			const ridge = clamp01((surface - 120) / 70) * slope
 			base = mixColor(base, snowy ? [248, 250, 252] : [220, 220, 220], ridge * 0.6)
 		}
 
-		// 雪地/雪峰 biome 在高处更偏冷白
 		if (snowy && surface > 135) {
 			const snowiness = clamp01((surface - 135) / 35)
 			base = mixColor(base, [240, 245, 250], snowiness * 0.55)
@@ -301,7 +289,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 					dx = tile.array[x + 2][z + 1].surface - tile.array[x][z + 1].surface
 					dz = tile.array[x + 1][z + 2].surface - tile.array[x + 1][z].surface
 					if (Number.isFinite(dx) && Number.isFinite(dz)) {
-						// 纯经验缩放，目的只是让“陡坡/山脊”更容易被看出来
 						slope = clamp01(Math.hypot(dx, dz) / 36)
 					}
 				}
@@ -309,11 +296,14 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 				let base: RGB
 				if (isRiver) {
 					base = this.waterColor(surface, seaLevel, biomeLower)
-				} else if (isOcean || surface <= seaLevel - 2) {
+				}
+				else if (isOcean || surface <= seaLevel - 2) {
 					base = this.waterColor(surface, seaLevel, biomeLower)
-				} else if (isBeach) {
+				}
+				else if (isBeach) {
 					base = [210, 198, 150]
-				} else {
+				}
+				else {
 					base = this.landColorByHeight(surface, seaLevel, biomeLower, slope)
 				}
 
