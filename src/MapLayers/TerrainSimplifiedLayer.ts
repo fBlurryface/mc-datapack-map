@@ -166,6 +166,21 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     return Math.tanh(terrain / 72)
   }
 
+  private colorToCss(color: [number, number, number]): string {
+    return `rgb(${Math.round(color[0])}, ${Math.round(color[1])}, ${Math.round(color[2])})`
+  }
+
+  private applyShade(
+    color: [number, number, number],
+    shade: number,
+  ): [number, number, number] {
+    return [
+      clamp255(color[0] * shade),
+      clamp255(color[1] * shade),
+      clamp255(color[2] * shade),
+    ]
+  }
+
   private getCell(tile: Tile, x: number, z: number): TileCell | undefined {
     return tile.array?.[x]?.[z]
   }
@@ -210,33 +225,57 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     return max - min
   }
 
-  private isSnowBiome(biomeLower: string): boolean {
+  private isPeakBiome(biomeLower: string): boolean {
     return (
-      biomeLower.includes("snow") ||
-      biomeLower.includes("frozen") ||
-      biomeLower.includes("ice") ||
-      biomeLower.includes("grove") ||
-      biomeLower.includes("jagged_peaks") ||
       biomeLower.includes("frozen_peaks") ||
-      biomeLower.includes("snowy_slopes")
+      biomeLower.includes("jagged_peaks") ||
+      biomeLower.includes("stony_peaks")
     )
   }
 
-  private isRockyMountainBiome(biomeLower: string): boolean {
+  private isPeakSupportBiome(biomeLower: string): boolean {
     return (
-      biomeLower.includes("peaks") ||
-      biomeLower.includes("mountain") ||
-      biomeLower.includes("stony") ||
+      this.isPeakBiome(biomeLower) ||
+      biomeLower.includes("snowy_slopes") ||
+      biomeLower.includes("grove") ||
       biomeLower.includes("windswept") ||
-      biomeLower.includes("badlands")
+      biomeLower.includes("mountain")
     )
+  }
+
+  private peakRangeFactor(tile: Tile, x: number, z: number, radius: number): number {
+    if (!tile.array) return 0
+
+    let score = 0
+    let total = 0
+
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        const cell = this.getCell(tile, x + 1 + dx, z + 1 + dz)
+        if (!cell) continue
+
+        const biomeLower = cell.biome.toLowerCase()
+        const dist = Math.abs(dx) + Math.abs(dz)
+        const weight = 1 / (1 + dist)
+
+        total += weight
+
+        if (this.isPeakBiome(biomeLower)) {
+          score += weight * 1.0
+        } else if (this.isPeakSupportBiome(biomeLower)) {
+          score += weight * 0.45
+        }
+      }
+    }
+
+    if (total <= 0) return 0
+    return clamp01(score / total)
   }
 
   private landColor(
     tile: Tile,
     x: number,
     z: number,
-    biomeLower: string,
     surface: number,
     terrain: number,
     seaLevel: number,
@@ -249,7 +288,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     const centerH = heightAboveSea(surface, seaLevel)
 
     const avgSurfaceNear = this.averageSurface(tile, x, z, 1)
-    const avgSurfaceWide = this.averageSurface(tile, x, z, 2)
+    const avgSurfaceWide = this.averageSurface(tile, x, z, 3)
 
     const nearH = Number.isFinite(avgSurfaceNear)
       ? heightAboveSea(avgSurfaceNear, seaLevel)
@@ -258,48 +297,31 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
       ? heightAboveSea(avgSurfaceWide, seaLevel)
       : centerH
 
-    const relief = this.localRelief(tile, x, z, 2)
-
-    const snowBiome = this.isSnowBiome(biomeLower)
-    const rockyBiome = this.isRockyMountainBiome(biomeLower)
+    const relief = this.localRelief(tile, x, z, 3)
+    const peakMask = this.peakRangeFactor(tile, x, z, 4)
 
     const rocky = lerp3(
       [118, 126, 102],
-      [172, 168, 160],
+      [176, 172, 164],
       rugged,
     )
 
     const rockStrength =
-      clamp01((wideH - 34) / 44) * (0.28 + rugged * 0.52) +
-      clamp01((relief - 10) / 22) * 0.22 +
-      (rockyBiome ? 0.12 : 0)
+      peakMask * 0.62 +
+      clamp01((wideH - 34) / 44) * 0.22 +
+      clamp01((relief - 10) / 22) * 0.16
 
     let color = lerp3(base, rocky, clamp01(rockStrength))
 
     const snowStrength =
-      clamp01((nearH - 70) / 26) * (0.42 + rugged * 0.30) +
-      clamp01((wideH - 82) / 24) * 0.42 +
-      clamp01((relief - 16) / 18) * 0.16 +
-      (snowBiome ? 0.26 : 0)
+      peakMask * 0.72 +
+      clamp01((nearH - 78) / 22) * 0.14 +
+      clamp01((wideH - 86) / 20) * 0.10 +
+      clamp01((relief - 18) / 18) * 0.08
 
     color = lerp3(color, [245, 245, 245], clamp01(snowStrength))
 
     return color
-  }
-
-  private applyShade(
-    color: [number, number, number],
-    shade: number,
-  ): [number, number, number] {
-    return [
-      clamp255(color[0] * shade),
-      clamp255(color[1] * shade),
-      clamp255(color[2] * shade),
-    ]
-  }
-
-  private colorToCss(color: [number, number, number]): string {
-    return `rgb(${Math.round(color[0])}, ${Math.round(color[1])}, ${Math.round(color[2])})`
   }
 
   private calculateSurfaceShade(tile: Tile, x: number, z: number): number {
@@ -438,7 +460,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
             tile,
             x,
             z,
-            biomeLower,
             surface,
             terrain,
             seaLevel,
@@ -452,7 +473,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 
           if (!isBeach && Number.isFinite(terrain)) {
             const terrainShade = this.calculateTerrainShade(tile, x, z)
-            shade = lerp(surfaceShade, terrainShade, 0.24)
+            shade = lerp(surfaceShade, terrainShade, 0.20)
           } else {
             shade = surfaceShade
           }
