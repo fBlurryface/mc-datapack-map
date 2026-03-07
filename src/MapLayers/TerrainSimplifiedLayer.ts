@@ -112,22 +112,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     this.redraw()
   }
 
-  private heightFactor(surface: number, seaLevel: number, maxY: number): number {
-    if (!Number.isFinite(surface)) return 0.35
-    const denom = Math.max(1, maxY - seaLevel)
-    return clamp01((surface - seaLevel) / denom)
-  }
-
-  private terrainFactor(terrain: number): number {
-    if (!Number.isFinite(terrain)) return 0.5
-    return clamp01(0.5 + 0.5 * Math.tanh(terrain / 64))
-  }
-
-  private terrainSlopeValue(terrain: number): number {
-    if (!Number.isFinite(terrain)) return 0
-    return Math.tanh(terrain / 64)
-  }
-
   private landColorByHeight(
     surface: number,
     seaLevel: number,
@@ -135,7 +119,8 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
   ): [number, number, number] {
     if (!Number.isFinite(surface)) return [80, 160, 95]
 
-    const t = this.heightFactor(surface, seaLevel, maxY)
+    const denom = Math.max(1, maxY - seaLevel)
+    const t = clamp01((surface - seaLevel) / denom)
 
     if (t < 0.35) {
       return lerp3([55, 155, 75], [175, 175, 95], t / 0.35)
@@ -146,29 +131,21 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     return lerp3([125, 125, 125], [245, 245, 245], (t - 0.75) / 0.25)
   }
 
-  private ruggedColor(
-    terrain: number,
-    surface: number,
-    seaLevel: number,
-    maxY: number,
-  ): [number, number, number] {
-    const t = this.terrainFactor(terrain)
-    const h = this.heightFactor(surface, seaLevel, maxY)
+  private waterColor(surface: number, seaLevel: number): [number, number, number] {
+    if (!Number.isFinite(surface)) return [25, 90, 190]
 
-    let color: [number, number, number]
-    if (t < 0.4) {
-      color = lerp3([72, 132, 74], [126, 132, 102], t / 0.4)
-    } else if (t < 0.75) {
-      color = lerp3([126, 132, 102], [170, 170, 170], (t - 0.4) / 0.35)
-    } else {
-      color = lerp3([170, 170, 170], [235, 235, 235], (t - 0.75) / 0.25)
-    }
+    const depth = clamp01((seaLevel - surface) / 32)
+    return lerp3([25, 110, 210], [8, 25, 70], depth)
+  }
 
-    if (h > 0.72) {
-      color = lerp3(color, [245, 245, 245], clamp01((h - 0.72) / 0.28) * 0.55)
-    }
+  private terrainNormalized(terrain: number): number {
+    if (!Number.isFinite(terrain)) return 0.5
+    return clamp01(0.5 + 0.5 * Math.tanh(terrain / 72))
+  }
 
-    return color
+  private terrainSlope(terrain: number): number {
+    if (!Number.isFinite(terrain)) return 0
+    return Math.tanh(terrain / 72)
   }
 
   private landColor(
@@ -177,47 +154,18 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     seaLevel: number,
     maxY: number,
   ): [number, number, number] {
-    const heightBase = this.landColorByHeight(surface, seaLevel, maxY)
-    const ruggedBase = this.ruggedColor(terrain, surface, seaLevel, maxY)
+    const base = this.landColorByHeight(surface, seaLevel, maxY)
+    if (!Number.isFinite(terrain)) return base
 
-    const h = this.heightFactor(surface, seaLevel, maxY)
-    const t = this.terrainFactor(terrain)
+    const rugged = this.terrainNormalized(terrain)
+    const rocky = lerp3([96, 132, 86], [166, 160, 148], rugged)
 
-    const blend = clamp01(0.18 + t * 0.22 + h * 0.14)
-
-    return lerp3(heightBase, ruggedBase, blend)
-  }
-
-  private waterColor(
-    surface: number,
-    seaLevel: number,
-    isRiver: boolean,
-  ): [number, number, number] {
-    if (!Number.isFinite(surface)) {
-      return isRiver ? [45, 170, 245] : [25, 90, 190]
-    }
-
-    const depth = clamp01((seaLevel - surface) / 40)
-
-    if (isRiver) {
-      return lerp3([70, 190, 240], [28, 112, 170], depth)
-    }
-
-    return lerp3([32, 132, 220], [10, 34, 92], depth)
-  }
-
-  private beachColor(
-    surface: number,
-    seaLevel: number,
-    terrain: number,
-  ): [number, number, number] {
-    const h = Number.isFinite(surface)
-      ? clamp01((surface - (seaLevel - 2)) / 8)
+    const heightT = Number.isFinite(surface)
+      ? clamp01((surface - seaLevel) / Math.max(1, maxY - seaLevel))
       : 0.5
-    const base = lerp3([202, 194, 146], [232, 223, 181], h)
-    const t = this.terrainFactor(terrain)
 
-    return lerp3(base, [176, 166, 130], t * 0.18)
+    const blend = clamp01(0.08 + rugged * 0.16 + heightT * 0.05)
+    return lerp3(base, rocky, blend)
   }
 
   private applyShade(
@@ -239,38 +187,54 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     return tile.array?.[x]?.[z]
   }
 
-  private calculateTerrainShade(tile: Tile, x: number, z: number, isWater: boolean): number {
+  private calculateSurfaceShade(tile: Tile, x: number, z: number): number {
     if (!tile.array || tile.step === undefined) return 1
 
-    const west = this.getCell(tile, x, z + 1) ?? this.getCell(tile, x + 1, z + 1)
-    const east = this.getCell(tile, x + 2, z + 1) ?? this.getCell(tile, x + 1, z + 1)
-    const north = this.getCell(tile, x + 1, z) ?? this.getCell(tile, x + 1, z + 1)
-    const south = this.getCell(tile, x + 1, z + 2) ?? this.getCell(tile, x + 1, z + 1)
+    const center = this.getCell(tile, x + 1, z + 1)
+    if (!center || !Number.isFinite(center.surface)) return 1
+
+    const west = this.getCell(tile, x, z + 1)
+    const east = this.getCell(tile, x + 2, z + 1)
+    const north = this.getCell(tile, x + 1, z)
+    const south = this.getCell(tile, x + 1, z + 2)
 
     if (!west || !east || !north || !south) return 1
-
-    const dxSurface =
-      (Number.isFinite(east.surface) ? east.surface : 0) -
-      (Number.isFinite(west.surface) ? west.surface : 0)
-    const dzSurface =
-      (Number.isFinite(south.surface) ? south.surface : 0) -
-      (Number.isFinite(north.surface) ? north.surface : 0)
-
-    const dxTerrain =
-      this.terrainSlopeValue(east.terrain) - this.terrainSlopeValue(west.terrain)
-    const dzTerrain =
-      this.terrainSlopeValue(south.terrain) - this.terrainSlopeValue(north.terrain)
-
-    const combinedDx = dxSurface + dxTerrain * 10
-    const combinedDz = dzSurface + dzTerrain * 10
-
-    let shade = calculateHillshade(combinedDx, combinedDz, tile.step)
-
-    if (isWater) {
-      shade = lerp(1, shade, 0.10)
+    if (
+      !Number.isFinite(west.surface) ||
+      !Number.isFinite(east.surface) ||
+      !Number.isFinite(north.surface) ||
+      !Number.isFinite(south.surface)
+    ) {
+      return 1
     }
 
-    return shade
+    const dx = east.surface - west.surface
+    const dz = south.surface - north.surface
+    return calculateHillshade(dx, dz, tile.step)
+  }
+
+  private calculateTerrainShade(tile: Tile, x: number, z: number): number {
+    if (!tile.array || tile.step === undefined) return 1
+
+    const west = this.getCell(tile, x, z + 1)
+    const east = this.getCell(tile, x + 2, z + 1)
+    const north = this.getCell(tile, x + 1, z)
+    const south = this.getCell(tile, x + 1, z + 2)
+
+    if (!west || !east || !north || !south) return 1
+    if (
+      !Number.isFinite(west.terrain) ||
+      !Number.isFinite(east.terrain) ||
+      !Number.isFinite(north.terrain) ||
+      !Number.isFinite(south.terrain)
+    ) {
+      return 1
+    }
+
+    const dx = this.terrainSlope(east.terrain) - this.terrainSlope(west.terrain)
+    const dz = this.terrainSlope(south.terrain) - this.terrainSlope(north.terrain)
+
+    return calculateHillshade(dx * 18, dz * 18, tile.step)
   }
 
   private drawSlimeOverlay(tile: Tile) {
@@ -291,7 +255,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 
     const cx0 = Math.floor(xMin / 16)
     const cx1 = Math.floor((xMax - 1) / 16)
-    const cz0 = Math.floor((zMin - 1 + 1) / 16)
+    const cz0 = Math.floor(zMin / 16)
     const cz1 = Math.floor((zMax - 1) / 16)
 
     const ctx = tile.ctx
@@ -343,30 +307,34 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
         const surface = cell.surface
         const terrain = cell.terrain
 
+        // 这里严格保留原本正确的海陆轮廓判定
         const isRiver = biomeLower.includes("river")
         const isOcean = biomeLower.includes("ocean")
-        const isBelowSea = Number.isFinite(surface) && surface <= seaLevel
-        const isNearSea =
-          Number.isFinite(surface) && surface >= seaLevel - 2 && surface <= seaLevel + 4
-        const isBeach =
-          biomeLower.includes("beach") ||
-          biomeLower.includes("shore") ||
-          (!isRiver && !isOcean && !isBelowSea && isNearSea)
-
-        const isWater = isRiver || isOcean || isBelowSea
+        const isBeach = biomeLower.includes("beach") || biomeLower.includes("shore")
 
         let base: [number, number, number]
         if (isRiver) {
-          base = this.waterColor(surface, seaLevel, true)
-        } else if (isWater) {
-          base = this.waterColor(surface, seaLevel, false)
+          base = [45, 170, 245]
+        } else if (isOcean) {
+          base = this.waterColor(surface, seaLevel)
         } else if (isBeach) {
-          base = this.beachColor(surface, seaLevel, terrain)
+          base = [210, 200, 150]
         } else {
           base = this.landColor(surface, terrain, seaLevel, maxY)
         }
 
-        const shade = this.calculateTerrainShade(tile, x, z, isWater)
+        let shade = 1.0
+        if (!isOcean && !isRiver) {
+          const surfaceShade = this.calculateSurfaceShade(tile, x, z)
+
+          if (!isBeach && Number.isFinite(terrain)) {
+            const terrainShade = this.calculateTerrainShade(tile, x, z)
+            shade = lerp(surfaceShade, terrainShade, 0.22)
+          } else {
+            shade = surfaceShade
+          }
+        }
+
         const shaded = this.applyShade(base, shade)
 
         const px = x / this.calcResolution
@@ -377,7 +345,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
         tile.ctx.fillStyle = this.colorToCss(shaded)
         tile.ctx.fillRect(px, pz, pw, ph)
 
-        if (isWater) {
+        if (isOcean || isRiver) {
           tile.ctx.drawImage(
             waveImage,
             px % 16,
@@ -462,18 +430,20 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
       update.noiseGeneratorSettingsJson = toRaw(
         this.loadedDimensionStore.loaded_dimension.noise_settings_json,
       )
+
       update.surfaceDensityFunctionId =
         getCustomDensityFunction(
           "snowcapped_surface",
           this.loadedDimensionStore.loaded_dimension.noise_settings_id!,
           this.settingsStore.dimension,
-        )?.toString() ?? ""
+        )?.toString() ?? "<none>"
+
       update.terrainDensityFunctionId =
         getCustomDensityFunction(
           "map_simple_terrain",
           this.loadedDimensionStore.loaded_dimension.noise_settings_id!,
           this.settingsStore.dimension,
-        )?.toString() ?? ""
+        )?.toString() ?? "<none>"
     }
 
     if (do_update.settings) {
