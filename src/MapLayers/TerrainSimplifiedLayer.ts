@@ -127,26 +127,26 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     const h = heightAboveSea(surface, seaLevel)
 
     if (h < 8) {
-      return lerp3([76, 170, 88], [92, 176, 96], clamp01(h / 8))
+      return lerp3([78, 172, 90], [96, 178, 100], clamp01(h / 8))
     }
 
     if (h < 28) {
-      return lerp3([92, 176, 96], [118, 170, 92], clamp01((h - 8) / 20))
+      return lerp3([96, 178, 100], [122, 171, 95], clamp01((h - 8) / 20))
     }
 
     if (h < 56) {
-      return lerp3([118, 170, 92], [148, 156, 98], clamp01((h - 28) / 28))
+      return lerp3([122, 171, 95], [150, 158, 100], clamp01((h - 28) / 28))
     }
 
     if (h < 88) {
-      return lerp3([148, 156, 98], [136, 128, 112], clamp01((h - 56) / 32))
+      return lerp3([150, 158, 100], [142, 132, 116], clamp01((h - 56) / 32))
     }
 
     if (h < 120) {
-      return lerp3([136, 128, 112], [176, 172, 168], clamp01((h - 88) / 32))
+      return lerp3([142, 132, 116], [176, 170, 160], clamp01((h - 88) / 32))
     }
 
-    return lerp3([176, 172, 168], [232, 232, 232], clamp01((h - 120) / 40))
+    return lerp3([176, 170, 160], [226, 226, 226], clamp01((h - 120) / 40))
   }
 
   private waterColor(surface: number, seaLevel: number): [number, number, number] {
@@ -166,32 +166,121 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     return Math.tanh(terrain / 72)
   }
 
+  private getCell(tile: Tile, x: number, z: number): TileCell | undefined {
+    return tile.array?.[x]?.[z]
+  }
+
+  private averageSurface(tile: Tile, x: number, z: number, radius: number): number {
+    if (!tile.array) return NaN
+
+    let sum = 0
+    let count = 0
+
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        const cell = this.getCell(tile, x + 1 + dx, z + 1 + dz)
+        if (!cell || !Number.isFinite(cell.surface)) continue
+        sum += cell.surface
+        count++
+      }
+    }
+
+    if (count === 0) return NaN
+    return sum / count
+  }
+
+  private localRelief(tile: Tile, x: number, z: number, radius: number): number {
+    if (!tile.array) return 0
+
+    let min = Infinity
+    let max = -Infinity
+    let found = false
+
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        const cell = this.getCell(tile, x + 1 + dx, z + 1 + dz)
+        if (!cell || !Number.isFinite(cell.surface)) continue
+        min = Math.min(min, cell.surface)
+        max = Math.max(max, cell.surface)
+        found = true
+      }
+    }
+
+    if (!found) return 0
+    return max - min
+  }
+
+  private isSnowBiome(biomeLower: string): boolean {
+    return (
+      biomeLower.includes("snow") ||
+      biomeLower.includes("frozen") ||
+      biomeLower.includes("ice") ||
+      biomeLower.includes("grove") ||
+      biomeLower.includes("jagged_peaks") ||
+      biomeLower.includes("frozen_peaks") ||
+      biomeLower.includes("snowy_slopes")
+    )
+  }
+
+  private isRockyMountainBiome(biomeLower: string): boolean {
+    return (
+      biomeLower.includes("peaks") ||
+      biomeLower.includes("mountain") ||
+      biomeLower.includes("stony") ||
+      biomeLower.includes("windswept") ||
+      biomeLower.includes("badlands")
+    )
+  }
+
   private landColor(
+    tile: Tile,
+    x: number,
+    z: number,
+    biomeLower: string,
     surface: number,
     terrain: number,
     seaLevel: number,
     maxY: number,
   ): [number, number, number] {
     const base = this.landColorByHeight(surface, seaLevel, maxY)
-
     if (!Number.isFinite(surface)) return base
 
-    const h = heightAboveSea(surface, seaLevel)
     const rugged = this.terrainNormalized(terrain)
+    const centerH = heightAboveSea(surface, seaLevel)
 
-    const rockStrength =
-      clamp01((h - 48) / 56) * (0.35 + rugged * 0.65)
+    const avgSurfaceNear = this.averageSurface(tile, x, z, 1)
+    const avgSurfaceWide = this.averageSurface(tile, x, z, 2)
+
+    const nearH = Number.isFinite(avgSurfaceNear)
+      ? heightAboveSea(avgSurfaceNear, seaLevel)
+      : centerH
+    const wideH = Number.isFinite(avgSurfaceWide)
+      ? heightAboveSea(avgSurfaceWide, seaLevel)
+      : centerH
+
+    const relief = this.localRelief(tile, x, z, 2)
+
+    const snowBiome = this.isSnowBiome(biomeLower)
+    const rockyBiome = this.isRockyMountainBiome(biomeLower)
 
     const rocky = lerp3(
-      [116, 126, 102],
-      [168, 164, 156],
+      [118, 126, 102],
+      [172, 168, 160],
       rugged,
     )
 
-    let color = lerp3(base, rocky, clamp01(rockStrength * 0.65))
+    const rockStrength =
+      clamp01((wideH - 34) / 44) * (0.28 + rugged * 0.52) +
+      clamp01((relief - 10) / 22) * 0.22 +
+      (rockyBiome ? 0.12 : 0)
+
+    let color = lerp3(base, rocky, clamp01(rockStrength))
 
     const snowStrength =
-      clamp01((h - 96) / 36) * (0.55 + rugged * 0.45)
+      clamp01((nearH - 70) / 26) * (0.42 + rugged * 0.30) +
+      clamp01((wideH - 82) / 24) * 0.42 +
+      clamp01((relief - 16) / 18) * 0.16 +
+      (snowBiome ? 0.26 : 0)
 
     color = lerp3(color, [245, 245, 245], clamp01(snowStrength))
 
@@ -211,10 +300,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 
   private colorToCss(color: [number, number, number]): string {
     return `rgb(${Math.round(color[0])}, ${Math.round(color[1])}, ${Math.round(color[2])})`
-  }
-
-  private getCell(tile: Tile, x: number, z: number): TileCell | undefined {
-    return tile.array?.[x]?.[z]
   }
 
   private calculateSurfaceShade(tile: Tile, x: number, z: number): number {
@@ -349,7 +434,16 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
         } else if (isBeach) {
           base = [210, 200, 150]
         } else {
-          base = this.landColor(surface, terrain, seaLevel, maxY)
+          base = this.landColor(
+            tile,
+            x,
+            z,
+            biomeLower,
+            surface,
+            terrain,
+            seaLevel,
+            maxY,
+          )
         }
 
         let shade = 1.0
@@ -358,7 +452,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 
           if (!isBeach && Number.isFinite(terrain)) {
             const terrainShade = this.calculateTerrainShade(tile, x, z)
-            shade = lerp(surfaceShade, terrainShade, 0.38)
+            shade = lerp(surfaceShade, terrainShade, 0.24)
           } else {
             shade = surfaceShade
           }
