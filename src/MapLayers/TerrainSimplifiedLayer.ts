@@ -26,38 +26,14 @@ type Tile = {
 	bounds?: { west: number, east: number, north: number, south: number }
 }
 
-type RGB = [number, number, number]
-
 function clamp01(v: number) {
 	return Math.max(0, Math.min(1, v))
 }
-
 function lerp(a: number, b: number, t: number) {
 	return a + (b - a) * t
 }
-
-function lerp3(a: RGB, b: RGB, t: number): RGB {
+function lerp3(a: [number, number, number], b: [number, number, number], t: number): [number, number, number] {
 	return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]
-}
-
-function clampColor(c: RGB): RGB {
-	return [
-		Math.max(0, Math.min(255, c[0])),
-		Math.max(0, Math.min(255, c[1])),
-		Math.max(0, Math.min(255, c[2]))
-	]
-}
-
-function mulColor(c: RGB, m: number): RGB {
-	return clampColor([c[0] * m, c[1] * m, c[2] * m])
-}
-
-function mixColor(a: RGB, b: RGB, t: number): RGB {
-	return clampColor(lerp3(a, b, clamp01(t)))
-}
-
-function hasAny(text: string, parts: string[]) {
-	return parts.some(p => text.includes(p))
 }
 
 export class TerrainSimplifiedLayer extends L.GridLayer {
@@ -124,91 +100,21 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 		this.redraw()
 	}
 
-	private waterColor(surface: number, seaLevel: number, biomeLower: string): RGB {
-		const isRiver = biomeLower.includes("river")
-		const isOcean = biomeLower.includes("ocean")
-		const isFrozen = hasAny(biomeLower, ["frozen", "snowy", "ice"])
+	private landColorByHeight(surface: number, seaLevel: number, maxY: number): [number, number, number] {
+		if (!Number.isFinite(surface)) return [80, 160, 95]
 
-		if (isRiver) {
-			return isFrozen ? [150, 190, 220] : [55, 165, 240]
-		}
+		const denom = Math.max(1, (maxY - seaLevel))
+		const t = clamp01((surface - seaLevel) / denom)
 
-		const depth = Number.isFinite(surface) ? Math.max(0, seaLevel - surface) : 0
-		const isDeep = biomeLower.includes("deep_ocean") || depth >= 36
-		const isVeryDeep = depth >= 64
-
-		let base: RGB
-
-		if (depth <= 6) {
-			base = isFrozen ? [160, 205, 225] : [75, 165, 215]
-		}
-		else if (!isDeep) {
-			const t = clamp01((depth - 6) / 26)
-			base = isFrozen
-				? lerp3([150, 195, 220], [78, 120, 170], t)
-				: lerp3([60, 145, 210], [20, 70, 150], t)
-		}
-		else {
-			const t = clamp01((depth - 36) / 48)
-			base = isFrozen
-				? lerp3([90, 125, 170], [36, 60, 95], t)
-				: lerp3([18, 62, 145], [5, 18, 60], t)
-
-			if (isVeryDeep) {
-				base = mixColor(base, isFrozen ? [18, 28, 42] : [3, 8, 28], 0.35)
-			}
-		}
-
-		if (isOcean && biomeLower.includes("warm")) {
-			base = mixColor(base, [40, 170, 185], 0.15)
-		}
-
-		return clampColor(base)
+		if (t < 0.35) return lerp3([55, 155, 75], [175, 175, 95], t / 0.35)
+		if (t < 0.75) return lerp3([175, 175, 95], [125, 125, 125], (t - 0.35) / 0.4)
+		return lerp3([125, 125, 125], [245, 245, 245], (t - 0.75) / 0.25)
 	}
 
-	private landColorByHeight(surface: number, seaLevel: number, biomeLower: string, slope: number): RGB {
-		if (!Number.isFinite(surface)) return [92, 150, 92]
-
-		const snowy = hasAny(biomeLower, ["snowy", "frozen", "ice", "peaks", "grove", "slopes"])
-		const desert = hasAny(biomeLower, ["desert", "badlands"])
-		const warmDry = hasAny(biomeLower, ["savanna"])
-		const lush = hasAny(biomeLower, ["jungle", "forest", "taiga"])
-
-		let base: RGB
-
-		if (surface <= seaLevel + 6) {
-			base = desert ? [188, 170, 112] : [98, 148, 88]
-		}
-		else if (surface <= 90) {
-			base = desert ? [182, 156, 98] : lush ? [72, 132, 76] : [108, 145, 84]
-		}
-		else if (surface <= 118) {
-			base = desert ? [172, 142, 92] : warmDry ? [144, 136, 78] : [132, 142, 86]
-		}
-		else if (surface <= 140) {
-			base = desert ? [162, 132, 92] : [146, 132, 94]
-		}
-		else if (surface <= 165) {
-			base = snowy ? [138, 142, 150] : [128, 124, 120]
-		}
-		else if (surface <= 195) {
-			base = snowy ? [225, 233, 240] : [208, 208, 206]
-		}
-		else {
-			base = snowy ? [244, 247, 250] : [230, 230, 228]
-		}
-
-		if (surface > 120) {
-			const ridge = clamp01((surface - 120) / 70) * slope
-			base = mixColor(base, snowy ? [248, 250, 252] : [220, 220, 220], ridge * 0.6)
-		}
-
-		if (snowy && surface > 135) {
-			const snowiness = clamp01((surface - 135) / 35)
-			base = mixColor(base, [240, 245, 250], snowiness * 0.55)
-		}
-
-		return clampColor(base)
+	private waterColor(surface: number, seaLevel: number): [number, number, number] {
+		if (!Number.isFinite(surface)) return [25, 90, 190]
+		const depth = clamp01((seaLevel - surface) / 32)
+		return lerp3([25, 110, 210], [8, 25, 70], depth)
 	}
 
 	private drawSlimeOverlay(tile: Tile) {
@@ -269,6 +175,8 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 		tile.ctx.clearRect(0, 0, this.tileSize, this.tileSize)
 
 		const seaLevel = this.loadedDimensionStore.noise_generator_settings.seaLevel
+		const level_height = this.loadedDimensionStore.loaded_dimension.level_height ?? { minY: 0, height: 256 }
+		const maxY = level_height.minY + level_height.height
 
 		const samples = this.tileSize * this.calcResolution
 
@@ -282,35 +190,27 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 				const isOcean = biomeLower.includes("ocean")
 				const isBeach = biomeLower.includes("beach") || biomeLower.includes("shore")
 
-				let dx = 0
-				let dz = 0
-				let slope = 0
-				if (Number.isFinite(surface)) {
-					dx = tile.array[x + 2][z + 1].surface - tile.array[x][z + 1].surface
-					dz = tile.array[x + 1][z + 2].surface - tile.array[x + 1][z].surface
-					if (Number.isFinite(dx) && Number.isFinite(dz)) {
-						slope = clamp01(Math.hypot(dx, dz) / 36)
-					}
-				}
+				let base: [number, number, number]
 
-				let base: RGB
 				if (isRiver) {
-					base = this.waterColor(surface, seaLevel, biomeLower)
-				}
-				else if (isOcean || surface <= seaLevel - 2) {
-					base = this.waterColor(surface, seaLevel, biomeLower)
-				}
-				else if (isBeach) {
-					base = [210, 198, 150]
-				}
-				else {
-					base = this.landColorByHeight(surface, seaLevel, biomeLower, slope)
+					base = [45, 170, 245]
+				} else if (isOcean) {
+					base = this.waterColor(surface, seaLevel)
+				} else if (isBeach) {
+					base = [210, 200, 150]
+				} else {
+					base = this.landColorByHeight(surface, seaLevel, maxY)
 				}
 
 				let shade = 1.0
-				if (!isOcean && !isRiver && Number.isFinite(surface)) {
-					if (Number.isFinite(dx) && Number.isFinite(dz)) {
-						shade = calculateHillshade(dx, dz, tile.step)
+				if (!isOcean && !isRiver) {
+					const s00 = tile.array[x + 1][z + 1].surface
+					if (Number.isFinite(s00)) {
+						const dx = tile.array[x + 2][z + 1].surface - tile.array[x][z + 1].surface
+						const dz = tile.array[x + 1][z + 2].surface - tile.array[x + 1][z].surface
+						if (Number.isFinite(dx) && Number.isFinite(dz)) {
+							shade = calculateHillshade(dx, dz, tile.step)
+						}
 					}
 				}
 
@@ -319,8 +219,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 				const pw = 1 / this.calcResolution
 				const ph = 1 / this.calcResolution
 
-				const finalColor = mulColor(base, shade)
-				tile.ctx.fillStyle = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`
+				tile.ctx.fillStyle = `rgb(${base[0] * shade}, ${base[1] * shade}, ${base[2] * shade})`
 				tile.ctx.fillRect(px, pz, pw, ph)
 
 				if (isOcean || isRiver) {
