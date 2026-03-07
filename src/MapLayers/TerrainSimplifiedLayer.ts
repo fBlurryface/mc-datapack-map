@@ -57,6 +57,11 @@ function lerp3(
   ]
 }
 
+function heightAboveSea(surface: number, seaLevel: number) {
+  if (!Number.isFinite(surface)) return 0
+  return surface - seaLevel
+}
+
 export class TerrainSimplifiedLayer extends L.GridLayer {
   private next_worker_id = 0
   private Tiles: { [key: string]: Tile } = {}
@@ -115,20 +120,33 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
   private landColorByHeight(
     surface: number,
     seaLevel: number,
-    maxY: number,
+    _maxY: number,
   ): [number, number, number] {
     if (!Number.isFinite(surface)) return [80, 160, 95]
 
-    const denom = Math.max(1, maxY - seaLevel)
-    const t = clamp01((surface - seaLevel) / denom)
+    const h = heightAboveSea(surface, seaLevel)
 
-    if (t < 0.35) {
-      return lerp3([55, 155, 75], [175, 175, 95], t / 0.35)
+    if (h < 8) {
+      return lerp3([76, 170, 88], [92, 176, 96], clamp01(h / 8))
     }
-    if (t < 0.75) {
-      return lerp3([175, 175, 95], [125, 125, 125], (t - 0.35) / 0.4)
+
+    if (h < 28) {
+      return lerp3([92, 176, 96], [118, 170, 92], clamp01((h - 8) / 20))
     }
-    return lerp3([125, 125, 125], [245, 245, 245], (t - 0.75) / 0.25)
+
+    if (h < 56) {
+      return lerp3([118, 170, 92], [148, 156, 98], clamp01((h - 28) / 28))
+    }
+
+    if (h < 88) {
+      return lerp3([148, 156, 98], [136, 128, 112], clamp01((h - 56) / 32))
+    }
+
+    if (h < 120) {
+      return lerp3([136, 128, 112], [176, 172, 168], clamp01((h - 88) / 32))
+    }
+
+    return lerp3([176, 172, 168], [232, 232, 232], clamp01((h - 120) / 40))
   }
 
   private waterColor(surface: number, seaLevel: number): [number, number, number] {
@@ -155,17 +173,29 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
     maxY: number,
   ): [number, number, number] {
     const base = this.landColorByHeight(surface, seaLevel, maxY)
-    if (!Number.isFinite(terrain)) return base
 
+    if (!Number.isFinite(surface)) return base
+
+    const h = heightAboveSea(surface, seaLevel)
     const rugged = this.terrainNormalized(terrain)
-    const rocky = lerp3([96, 132, 86], [166, 160, 148], rugged)
 
-    const heightT = Number.isFinite(surface)
-      ? clamp01((surface - seaLevel) / Math.max(1, maxY - seaLevel))
-      : 0.5
+    const rockStrength =
+      clamp01((h - 48) / 56) * (0.35 + rugged * 0.65)
 
-    const blend = clamp01(0.08 + rugged * 0.16 + heightT * 0.05)
-    return lerp3(base, rocky, blend)
+    const rocky = lerp3(
+      [116, 126, 102],
+      [168, 164, 156],
+      rugged,
+    )
+
+    let color = lerp3(base, rocky, clamp01(rockStrength * 0.65))
+
+    const snowStrength =
+      clamp01((h - 96) / 36) * (0.55 + rugged * 0.45)
+
+    color = lerp3(color, [245, 245, 245], clamp01(snowStrength))
+
+    return color
   }
 
   private applyShade(
@@ -307,7 +337,6 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
         const surface = cell.surface
         const terrain = cell.terrain
 
-        // 这里严格保留原本正确的海陆轮廓判定
         const isRiver = biomeLower.includes("river")
         const isOcean = biomeLower.includes("ocean")
         const isBeach = biomeLower.includes("beach") || biomeLower.includes("shore")
@@ -329,7 +358,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 
           if (!isBeach && Number.isFinite(terrain)) {
             const terrainShade = this.calculateTerrainShade(tile, x, z)
-            shade = lerp(surfaceShade, terrainShade, 0.22)
+            shade = lerp(surfaceShade, terrainShade, 0.38)
           } else {
             shade = surfaceShade
           }
