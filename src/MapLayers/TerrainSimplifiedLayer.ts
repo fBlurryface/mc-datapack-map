@@ -100,15 +100,50 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 		this.redraw()
 	}
 
-	private landColorByHeight(surface: number, seaLevel: number, maxY: number): [number, number, number] {
+	private isSnowyMountainBiome(biomeLower: string) {
+		return (
+			biomeLower.includes("frozen_peaks") ||
+			biomeLower.includes("jagged_peaks") ||
+			biomeLower.includes("snowy_slopes") ||
+			biomeLower.includes("grove") ||
+			biomeLower.includes("ice_spikes") ||
+			biomeLower.includes("snowy")
+		)
+	}
+
+	private landColorByHeight(surface: number, seaLevel: number, maxY: number, biomeLower: string): [number, number, number] {
 		if (!Number.isFinite(surface)) return [80, 160, 95]
 
 		const denom = Math.max(1, (maxY - seaLevel))
-		const t = clamp01((surface - seaLevel) / denom)
+		const h = clamp01((surface - seaLevel) / denom)
 
-		if (t < 0.35) return lerp3([55, 155, 75], [175, 175, 95], t / 0.35)
-		if (t < 0.75) return lerp3([175, 175, 95], [125, 125, 125], (t - 0.35) / 0.4)
-		return lerp3([125, 125, 125], [245, 245, 245], (t - 0.75) / 0.25)
+		// 更强调高山：高处更早进入岩石/高海拔色带
+		const t = Math.pow(h, 0.82)
+
+		const isSnowyMountain = this.isSnowyMountainBiome(biomeLower)
+
+		// 低地绿 -> 山麓黄褐 -> 岩灰 -> 高山亮灰
+		let base: [number, number, number]
+		if (t < 0.28) {
+			base = lerp3([50, 150, 72], [155, 168, 92], t / 0.28)
+		} else if (t < 0.52) {
+			base = lerp3([155, 168, 92], [150, 130, 92], (t - 0.28) / 0.24)
+		} else if (t < 0.75) {
+			base = lerp3([150, 130, 92], [118, 118, 118], (t - 0.52) / 0.23)
+		} else {
+			base = lerp3([118, 118, 118], [210, 210, 210], (t - 0.75) / 0.25)
+		}
+
+		// 雪山：中高海拔开始逐渐发白
+		if (isSnowyMountain) {
+			const snowStart = 0.58
+			const snowT = clamp01((t - snowStart) / (1 - snowStart))
+			if (snowT > 0) {
+				base = lerp3(base, [245, 247, 250], Math.pow(snowT, 0.8))
+			}
+		}
+
+		return base
 	}
 
 	private waterColor(surface: number, seaLevel: number): [number, number, number] {
@@ -199,7 +234,7 @@ export class TerrainSimplifiedLayer extends L.GridLayer {
 				} else if (isBeach) {
 					base = [210, 200, 150]
 				} else {
-					base = this.landColorByHeight(surface, seaLevel, maxY)
+					base = this.landColorByHeight(surface, seaLevel, maxY, biomeLower)
 				}
 
 				let shade = 1.0
