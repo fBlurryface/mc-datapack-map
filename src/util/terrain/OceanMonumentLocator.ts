@@ -7,7 +7,6 @@ import {
 	NoiseGeneratorSettings,
 	StructurePlacement,
 	StructureSet,
-	WorldgenStructure,
 } from "deepslate";
 import type {
 	TerrainSearchResult,
@@ -30,26 +29,24 @@ export type OceanMonumentLocateResponse = {
 	needsZoom: boolean;
 };
 
-const OCEAN_MONUMENT_ID = "minecraft:ocean_monument" as TerrainSearchToolId;
-const OCEAN_MONUMENT_IDENTIFIER = Identifier.create("minecraft:ocean_monument");
-
-const OCEAN_BIOMES = new Set([
-	"minecraft:ocean",
-	"minecraft:deep_ocean",
-	"minecraft:cold_ocean",
-	"minecraft:deep_cold_ocean",
-	"minecraft:lukewarm_ocean",
-	"minecraft:deep_lukewarm_ocean",
-	"minecraft:warm_ocean",
-	"minecraft:frozen_ocean",
-	"minecraft:deep_frozen_ocean",
+const TOOL_ID = "minecraft:monument" as TerrainSearchToolId;
+const MONUMENT_STRUCTURE_KEYS = new Set([
+	"minecraft:monument",
+	"minecraft:ocean_monument",
 ]);
 
+function getOceanMonumentStructureId(set: StructureSet): Identifier | undefined {
+	for (const entry of set.structures) {
+		const key = entry.structure.key()?.toString();
+		if (key && MONUMENT_STRUCTURE_KEYS.has(key)) {
+			return entry.structure.key();
+		}
+	}
+	return undefined;
+}
+
 function isOceanMonumentSet(set: StructureSet) {
-	return set.structures.some((entry) => {
-		const structure = entry.structure.value();
-		return structure instanceof WorldgenStructure.OceanMonumentStructure;
-	});
+	return getOceanMonumentStructureId(set) !== undefined;
 }
 
 function getMinZoomForSet(
@@ -72,47 +69,9 @@ function getMinZoomForSet(
 	return minZoom;
 }
 
-function getBiomeIdAt(
-	biomeSource: BiomeSource,
-	sampler: Climate.Sampler,
-	x: number,
-	y: number,
-	z: number,
-) {
-	return biomeSource.getBiome(x >> 2, y >> 2, z >> 2, sampler).toString();
-}
-
-function isLikelyOceanMonumentChunk(
-	biomeSource: BiomeSource,
-	sampler: Climate.Sampler,
-	chunkX: number,
-	chunkZ: number,
-) {
-	const centerX = (chunkX << 4) + 8;
-	const centerZ = (chunkZ << 4) + 8;
-	const sampleY = 64;
-
-	const samples = [
-		getBiomeIdAt(biomeSource, sampler, centerX, sampleY, centerZ),
-		getBiomeIdAt(biomeSource, sampler, centerX - 16, sampleY, centerZ),
-		getBiomeIdAt(biomeSource, sampler, centerX + 16, sampleY, centerZ),
-		getBiomeIdAt(biomeSource, sampler, centerX, sampleY, centerZ - 16),
-		getBiomeIdAt(biomeSource, sampler, centerX, sampleY, centerZ + 16),
-	];
-
-	let oceanCount = 0;
-	let deepOceanCount = 0;
-
-	for (const biome of samples) {
-		if (OCEAN_BIOMES.has(biome)) oceanCount += 1;
-		if (biome.includes("deep_")) deepOceanCount += 1;
-	}
-
-	return oceanCount >= 4 && deepOceanCount >= 1;
-}
-
 function toResult(
 	setId: Identifier,
+	structureId: Identifier,
 	chunk: ChunkPos,
 ): TerrainSearchResult {
 	const x = (chunk[0] << 4) + 8;
@@ -120,8 +79,8 @@ function toResult(
 
 	return {
 		key: `${setId.toString()} ${chunk[0]},${chunk[1]}`,
-		tool: OCEAN_MONUMENT_ID,
-		structureId: OCEAN_MONUMENT_IDENTIFIER.toString(),
+		tool: TOOL_ID,
+		structureId: structureId.toString(),
 		setId: setId.toString(),
 		x,
 		y: 62,
@@ -140,7 +99,10 @@ export async function locateOceanMonumentsInView(
 
 	for (const setId of StructureSet.REGISTRY.keys()) {
 		const set = StructureSet.REGISTRY.get(setId);
-		if (!set || !isOceanMonumentSet(set)) continue;
+		if (!set) continue;
+
+		const structureId = getOceanMonumentStructureId(set);
+		if (!structureId) continue;
 
 		const minZoom = getMinZoomForSet(
 			set,
@@ -163,8 +125,7 @@ export async function locateOceanMonumentsInView(
 		);
 
 		for (const chunk of chunks) {
-			results.push(toResult(setId, chunk));
-			
+			results.push(toResult(setId, structureId, chunk));
 
 			workCounter += 1;
 			if (workCounter % 64 === 0) {
