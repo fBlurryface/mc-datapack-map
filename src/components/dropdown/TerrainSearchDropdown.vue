@@ -10,7 +10,7 @@ import {
 const terrainSearchStore = useTerrainSearchStore();
 const loadedDimensionStore = useLoadedDimensionStore();
 
-const entries = [Identifier.create("minecraft:ocean_monument")];
+const entries = [Identifier.create("minecraft:monument")];
 
 function toggleTool(id: Identifier) {
 	const key = id.toString() as TerrainSearchToolId;
