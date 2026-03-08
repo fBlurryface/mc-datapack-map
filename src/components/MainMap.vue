@@ -442,7 +442,7 @@ async function updateTerrainMarkers() {
 		return;
 	}
 
-	if (!terrainSearchStore.tools.has("minecraft:ocean_monument")) {
+	if (!terrainSearchStore.tools.has("minecraft:monument")) {
 		clearTerrainMarkers();
 		terrainSearchStore.error = null;
 		needs_zoom.value = false;
