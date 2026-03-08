@@ -31,6 +31,7 @@ export type OceanMonumentLocateResponse = {
 };
 
 const OCEAN_MONUMENT_ID = "minecraft:ocean_monument" as TerrainSearchToolId;
+const OCEAN_MONUMENT_IDENTIFIER = Identifier.create("minecraft:ocean_monument");
 
 const OCEAN_BIOMES = new Set([
 	"minecraft:ocean",
@@ -49,16 +50,6 @@ function isOceanMonumentSet(set: StructureSet) {
 		const structure = entry.structure.value();
 		return structure instanceof WorldgenStructure.OceanMonumentStructure;
 	});
-}
-
-function getOceanMonumentStructureId(set: StructureSet): Identifier | undefined {
-	for (const entry of set.structures) {
-		const structure = entry.structure.value();
-		if (structure instanceof WorldgenStructure.OceanMonumentStructure) {
-			return structure.id;
-		}
-	}
-	return undefined;
 }
 
 function getMinZoomForSet(
@@ -117,13 +108,11 @@ function isLikelyOceanMonumentChunk(
 		if (biome.includes("deep_")) deepOceanCount += 1;
 	}
 
-	// 至少大部分采样点在海洋里，并且至少一个点是 deep ocean
 	return oceanCount >= 4 && deepOceanCount >= 1;
 }
 
 function toResult(
 	setId: Identifier,
-	structureId: Identifier,
 	chunk: ChunkPos,
 ): TerrainSearchResult {
 	const x = (chunk[0] << 4) + 8;
@@ -132,7 +121,7 @@ function toResult(
 	return {
 		key: `${setId.toString()} ${chunk[0]},${chunk[1]}`,
 		tool: OCEAN_MONUMENT_ID,
-		structureId: structureId.toString(),
+		structureId: OCEAN_MONUMENT_IDENTIFIER.toString(),
 		setId: setId.toString(),
 		x,
 		y: 62,
@@ -152,9 +141,6 @@ export async function locateOceanMonumentsInView(
 	for (const setId of StructureSet.REGISTRY.keys()) {
 		const set = StructureSet.REGISTRY.get(setId);
 		if (!set || !isOceanMonumentSet(set)) continue;
-
-		const structureId = getOceanMonumentStructureId(set);
-		if (!structureId) continue;
 
 		const minZoom = getMinZoomForSet(
 			set,
@@ -185,7 +171,7 @@ export async function locateOceanMonumentsInView(
 					chunk[1],
 				)
 			) {
-				results.push(toResult(setId, structureId, chunk));
+				results.push(toResult(setId, chunk));
 			}
 
 			workCounter += 1;
