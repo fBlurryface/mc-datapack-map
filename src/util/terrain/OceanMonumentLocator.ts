@@ -1,6 +1,5 @@
 import {
 	BiomeSource,
-	BlockPos,
 	ChunkPos,
 	Climate,
 	Identifier,
@@ -10,7 +9,6 @@ import {
 	StructureSet,
 	WorldgenStructure,
 } from "deepslate";
-import { CachedBiomeSource } from "../CachedBiomeSource.js";
 import type {
 	TerrainSearchResult,
 	TerrainSearchToolId,
@@ -34,11 +32,33 @@ export type OceanMonumentLocateResponse = {
 
 const OCEAN_MONUMENT_ID = "minecraft:ocean_monument" as TerrainSearchToolId;
 
+const OCEAN_BIOMES = new Set([
+	"minecraft:ocean",
+	"minecraft:deep_ocean",
+	"minecraft:cold_ocean",
+	"minecraft:deep_cold_ocean",
+	"minecraft:lukewarm_ocean",
+	"minecraft:deep_lukewarm_ocean",
+	"minecraft:warm_ocean",
+	"minecraft:frozen_ocean",
+	"minecraft:deep_frozen_ocean",
+]);
+
 function isOceanMonumentSet(set: StructureSet) {
 	return set.structures.some((entry) => {
 		const structure = entry.structure.value();
 		return structure instanceof WorldgenStructure.OceanMonumentStructure;
 	});
+}
+
+function getOceanMonumentStructureId(set: StructureSet): Identifier | undefined {
+	for (const entry of set.structures) {
+		const structure = entry.structure.value();
+		if (structure instanceof WorldgenStructure.OceanMonumentStructure) {
+			return structure.id;
+		}
+	}
+	return undefined;
 }
 
 function getMinZoomForSet(
@@ -61,20 +81,62 @@ function getMinZoomForSet(
 	return minZoom;
 }
 
+function getBiomeIdAt(
+	biomeSource: BiomeSource,
+	sampler: Climate.Sampler,
+	x: number,
+	y: number,
+	z: number,
+) {
+	return biomeSource.getBiome(x >> 2, y >> 2, z >> 2, sampler).toString();
+}
+
+function isLikelyOceanMonumentChunk(
+	biomeSource: BiomeSource,
+	sampler: Climate.Sampler,
+	chunkX: number,
+	chunkZ: number,
+) {
+	const centerX = (chunkX << 4) + 8;
+	const centerZ = (chunkZ << 4) + 8;
+	const sampleY = 64;
+
+	const samples = [
+		getBiomeIdAt(biomeSource, sampler, centerX, sampleY, centerZ),
+		getBiomeIdAt(biomeSource, sampler, centerX - 16, sampleY, centerZ),
+		getBiomeIdAt(biomeSource, sampler, centerX + 16, sampleY, centerZ),
+		getBiomeIdAt(biomeSource, sampler, centerX, sampleY, centerZ - 16),
+		getBiomeIdAt(biomeSource, sampler, centerX, sampleY, centerZ + 16),
+	];
+
+	let oceanCount = 0;
+	let deepOceanCount = 0;
+
+	for (const biome of samples) {
+		if (OCEAN_BIOMES.has(biome)) oceanCount += 1;
+		if (biome.includes("deep_")) deepOceanCount += 1;
+	}
+
+	// 至少大部分采样点在海洋里，并且至少一个点是 deep ocean
+	return oceanCount >= 4 && deepOceanCount >= 1;
+}
+
 function toResult(
 	setId: Identifier,
 	structureId: Identifier,
-	pos: BlockPos,
 	chunk: ChunkPos,
 ): TerrainSearchResult {
+	const x = (chunk[0] << 4) + 8;
+	const z = (chunk[1] << 4) + 8;
+
 	return {
 		key: `${setId.toString()} ${chunk[0]},${chunk[1]}`,
 		tool: OCEAN_MONUMENT_ID,
 		structureId: structureId.toString(),
 		setId: setId.toString(),
-		x: pos[0],
-		y: pos[1],
-		z: pos[2],
+		x,
+		y: 62,
+		z,
 		chunkX: chunk[0],
 		chunkZ: chunk[1],
 	};
@@ -83,14 +145,6 @@ function toResult(
 export async function locateOceanMonumentsInView(
 	options: OceanMonumentLocateOptions,
 ): Promise<OceanMonumentLocateResponse> {
-	const cachedBiomeSource = new CachedBiomeSource(options.biomeSource);
-	const context = new WorldgenStructure.GenerationContext(
-		options.seed,
-		cachedBiomeSource,
-		options.noiseGeneratorSettings,
-		options.levelHeight,
-	);
-
 	const results: TerrainSearchResult[] = [];
 	let needsZoom = false;
 	let workCounter = 0;
@@ -98,6 +152,9 @@ export async function locateOceanMonumentsInView(
 	for (const setId of StructureSet.REGISTRY.keys()) {
 		const set = StructureSet.REGISTRY.get(setId);
 		if (!set || !isOceanMonumentSet(set)) continue;
+
+		const structureId = getOceanMonumentStructureId(set);
+		if (!structureId) continue;
 
 		const minZoom = getMinZoomForSet(
 			set,
@@ -120,16 +177,15 @@ export async function locateOceanMonumentsInView(
 		);
 
 		for (const chunk of chunks) {
-			cachedBiomeSource.setupCache(chunk[0] << 2, chunk[1] << 2);
-
-			try {
-				const structure = set.getStructureInChunk(chunk[0], chunk[1], context);
-				if (!structure) continue;
-				if (structure.id.toString() !== OCEAN_MONUMENT_ID) continue;
-
-				results.push(toResult(setId, structure.id, structure.pos, chunk));
-			} catch {
-				// 保持单个候选点失败不影响整次刷新
+			if (
+				isLikelyOceanMonumentChunk(
+					options.biomeSource,
+					options.sampler,
+					chunk[0],
+					chunk[1],
+				)
+			) {
+				results.push(toResult(setId, structureId, chunk));
 			}
 
 			workCounter += 1;
