@@ -60,6 +60,8 @@ const project_down = ref(true);
 const y = ref(320);
 const show_graticule = ref(false);
 
+const terrainResultCount = ref(0);
+
 let map: L.Map;
 let zoom: L.Control.Zoom;
 let markers: L.LayerGroup;
@@ -95,6 +97,7 @@ function clearTerrainMarkers() {
 	terrainMarkerMap.clear();
 	terrainSearchStore.results = [];
 	terrainSearchStore.loading = false;
+	terrainResultCount.value = 0;
 }
 
 function showSlimeChunkPopup(chunkX: number, chunkZ: number) {
@@ -490,7 +493,7 @@ async function updateTerrainMarkers() {
 		for (const result of results) {
 			if (terrainMarkerMap.has(result.key)) continue;
 
-			const marker = getMarker(
+			const marker = getTerrainLabeledMarker(
 				Identifier.parse(result.structureId),
 				BlockPos.create(result.x, result.y, result.z),
 				terrainMarkers,
@@ -506,6 +509,7 @@ async function updateTerrainMarkers() {
 		}
 
 		terrainSearchStore.results = results;
+		terrainResultCount.value = results.length;
 		needs_zoom.value = needsZoom;
 	} catch (error) {
 		if (updateToken !== terrainUpdateToken) return;
@@ -541,6 +545,42 @@ function getMarker(structureId: Identifier, pos: BlockPos, targetLayer: L.LayerG
 		popupAnchor: [0, -10],
 	}));
 
+	return marker;
+}
+
+function getTerrainLabeledMarker(structureId: Identifier, pos: BlockPos, targetLayer: L.LayerGroup) {
+	const crs = map.options.crs!;
+	const mapPos = new L.Point(pos[0], -pos[2]);
+	const iconUrl = loadedDimensionStore.getIcon(structureId);
+
+	const title = settingsStore.getLocalizedName("structure", structureId, false);
+	const coordText = `x ${pos[0]}, z ${pos[2]}`;
+
+	const html = `
+		<div class="terrain-structure-pin">
+			<div class="terrain-structure-label">${title}</div>
+			<div class="terrain-structure-coords">${coordText}</div>
+			<div class="terrain-structure-icon-wrap">
+				<img class="terrain-structure-icon" src="${iconUrl}" alt="${title}" />
+			</div>
+		</div>
+	`;
+
+	const marker = L.marker(crs.unproject(mapPos), {
+		icon: L.divIcon({
+			className: "terrain-structure-marker",
+			html,
+			iconSize: [180, 70],
+			iconAnchor: [90, 58],
+			popupAnchor: [0, -48],
+		}),
+	});
+
+	const popup = L.popup().setContent(() =>
+		`${title}<br />${i18n.t("map.coords.xyz", { x: pos[0], y: pos[1], z: pos[2] })}`,
+	);
+
+	marker.bindPopup(popup).addTo(targetLayer);
 	return marker;
 }
 
@@ -658,6 +698,12 @@ watch(() => terrainSearchStore.tools.size, () => {
 				{{ terrainSearchStore.error }}
 			</div>
 		</Transition>
+
+		<Transition>
+			<div class="info terrain-results" v-if="settingsStore.map_view === 'terrain' && terrainSearchStore.tools.size > 0 && !terrainSearchStore.error">
+				Found {{ terrainResultCount }} ocean monument<span v-if="terrainResultCount !== 1">s</span> in view
+			</div>
+		</Transition>
 	</div>
 
 	<Transition>
@@ -742,5 +788,67 @@ watch(() => terrainSearchStore.tools.size, () => {
 .unsupported {
 	background-color: rgb(165, 33, 33);
 	border: 2px solid white;
+}
+
+.terrain-results {
+	background-color: rgb(18, 91, 63);
+	border: 2px solid rgba(255, 255, 255, 0.75);
+}
+</style>
+
+<style>
+.terrain-structure-marker {
+	background: transparent !important;
+	border: none !important;
+}
+
+.terrain-structure-pin {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+	transform: translateY(-4px);
+	pointer-events: auto;
+}
+
+.terrain-structure-label {
+	background: rgba(4, 36, 66, 0.92);
+	color: white;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1;
+	padding: 4px 8px;
+	border-radius: 999px;
+	white-space: nowrap;
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.terrain-structure-coords {
+	background: rgba(255, 255, 255, 0.93);
+	color: #17324a;
+	font-size: 10px;
+	line-height: 1;
+	padding: 3px 6px;
+	border-radius: 999px;
+	white-space: nowrap;
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.terrain-structure-icon-wrap {
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	background: rgba(255, 255, 255, 0.98);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28);
+	border: 2px solid rgba(8, 61, 102, 0.85);
+}
+
+.terrain-structure-icon {
+	width: 24px;
+	height: 24px;
+	display: block;
 }
 </style>
