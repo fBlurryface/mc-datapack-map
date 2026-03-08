@@ -163,16 +163,8 @@ export async function locateOceanMonumentsInView(
 		);
 
 		for (const chunk of chunks) {
-			if (
-				isLikelyOceanMonumentChunk(
-					options.biomeSource,
-					options.sampler,
-					chunk[0],
-					chunk[1],
-				)
-			) {
-				results.push(toResult(setId, chunk));
-			}
+			results.push(toResult(setId, chunk));
+			
 
 			workCounter += 1;
 			if (workCounter % 64 === 0) {
